@@ -60,9 +60,9 @@ bool EYEBOTInit()
   pinMode(CAM_SIGNAL_PIN, INPUT_PULLUP);
 
   //Initialize the SPI bus and add the ESP32-Camera as a device
-  esp_err_t ret = spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO);
+  esp_err_t ret = spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO);
   assert(ret == ESP_OK);
-  ret = spi_bus_add_device(SPI2_HOST, &devcfg, &cam_spi_handle);
+  ret = spi_bus_add_device(SPI3_HOST, &devcfg, &cam_spi_handle);
   assert(ret == ESP_OK);
   
   return true;
@@ -74,7 +74,7 @@ bool EYEBOTInit()
 
 bool CAMGetImage(rgb565 imgbuf[])
 {
-  uint32_t command = 0;
+  uint32_t command = 1;
   //Send command byte zero to get image
   spi_transaction_t t = {};
   t.length = sizeof(uint32_t)*8;
@@ -121,15 +121,8 @@ bool CAMGetImage(rgb888 imgbuf[])
     for (int col = 0; col < QQVGA_WIDTH; col++)
     {
       int i = row*QQVGA_WIDTH + col;
-      rgb565 pix = cam_buffer[i];
-      rgb888 hue = {
-        .red = (pix & 0xF800) >> 8,
-        .green = (pix & 0x07E0) >> 3,
-        .blue = (pix & 0x001F) << 3,
-        .alpha = 0xFF 
-      };
 
-      imgbuf[i] = hue;
+      IP565To888(cam_buffer[i], &imgbuf[i]);
     }
   }
 
@@ -138,7 +131,7 @@ bool CAMGetImage(rgb888 imgbuf[])
 
 bool CAMChangeSettings(camera_settings settings)
 {
-  uint32_t command = 1;
+  uint32_t command = 2;
   //Send command word 1 to change settings
   spi_transaction_t t = {};
   t.length = sizeof(uint32_t)*8;
@@ -169,6 +162,30 @@ bool CAMChangeSettings(camera_settings settings)
 //Image Processing Functions
 /////////////////////////////
 
+bool IP888To565(rgb888 in_hue, rgb565 *out_hue)
+{
+  uint16_t red = in_hue.red;
+  red <<= 8;
+  uint16_t green = in_hue.green;
+  green <<= 3;
+  uint16_t blue = in_hue.blue;
+  blue >>= 3;
+
+  *out_hue = (red & 0xF800) | (green & 0x07E0) | blue;
+
+  return true;
+}
+
+bool IP565To888(rgb565 in_hue, rgb888 *out_hue)
+{
+  out_hue->red = (in_hue & 0xF800) >> 8;
+  out_hue->green = (in_hue & 0x07E0) >> 3;
+  out_hue->blue = (in_hue & 0x001F) << 3;
+  out_hue->alpha = 0xFF;
+
+  return true;
+}
+
 bool IPColorToGray(int img_width, int img_height, rgb888 col_img[], gray gray_img[])
 {
   return true;
@@ -178,6 +195,15 @@ bool IPColorToGray(int img_width, int img_height, rgb888 col_img[], gray gray_im
 //LCD Functions
 ////////////////
 
+const rgb888 RED = {0xFF, 0, 0, 0xFF};
+const rgb888 GREEN = {0, 0xFF, 0, 0xFF};
+const rgb888 BLUE = {0, 0, 0xFF, 0xFF};
+const rgb888 BLACK = {0, 0, 0, 0xFF};
+const rgb888 WHITE = {0xFF, 0xFF, 0xFF, 0xFF};
+const rgb888 YELLOW = {0xFF, 0xFF, 0, 0xFF};
+const rgb888 MAGENTA = {0xFF, 0, 0xFF, 0xFF};
+const rgb888 CYAN = {0, 0xFF, 0xFF, 0xFF};
+
 static rgb565 lcd_buf[LCD_HEIGHT*LCD_WIDTH];
 
 bool LCDPushColorImage(int xpos, int ypos, int img_width, int img_height, rgb565 img[])
@@ -185,53 +211,27 @@ bool LCDPushColorImage(int xpos, int ypos, int img_width, int img_height, rgb565
   if (img_width < 0 || img_height < 0)
     return false;
 
-  xpos = xpos < 0 || xpos > LCD_WIDTH ? 0 : xpos;
-  ypos = ypos < 0 || ypos > LCD_HEIGHT ? 0 : ypos;
-  int xlen = img_width > LCD_WIDTH - xpos ? LCD_WIDTH - xpos : img_width;
-  int ylen = img_height > LCD_HEIGHT - ypos ? LCD_HEIGHT - ypos : img_height;
-
-  rgb565 *lcd_start_pos = lcd_buf + ypos*LCD_WIDTH + xpos;
-
-  for (int y = 0; y < ylen; y++)
-  {
-    for (int x = 0; x < xlen; x++)
-    {
-      rgb565 *lcd_pos = lcd_start_pos + y*LCD_WIDTH + x;
-      *lcd_pos = img[y*img_width + x];
-    }
-  }
+  tft.pushImage(xpos, ypos, img_width, img_height, img);
 
   return true;
 }
 
 bool LCDPushColorImage(int xpos, int ypos, int img_width, int img_height, rgb888 img[])
 {
-  if (img_width < 0 || img_height < 0)
+  if (img_width < 0 || img_height < 0 || (img_width*img_height) > (LCD_WIDTH*LCD_HEIGHT))
     return false;
 
-  xpos = xpos < 0 || xpos > LCD_WIDTH ? 0 : xpos;
-  ypos = ypos < 0 || ypos > LCD_HEIGHT ? 0 : ypos;
-  int xlen = img_width > LCD_WIDTH - xpos ? LCD_WIDTH - xpos : img_width;
-  int ylen = img_height > LCD_HEIGHT - ypos ? LCD_HEIGHT - ypos : img_height;
-
-  rgb565 *lcd_start_pos = lcd_buf + ypos*LCD_WIDTH + xpos;
-
-  for (int y = 0; y < ylen; y++)
+  for (int y = 0; y < img_height; y++)
   {
-    for (int x = 0; x < xlen; x++)
+    for (int x = 0; x < img_width; x++)
     {
-      rgb565 *lcd_pos = lcd_start_pos + y*LCD_WIDTH + x;
-      rgb888 hue = img[y*img_width + x];
+      int i = y*img_width + x;
 
-      uint16_t red = hue.red;
-      uint16_t green = hue.green;
-      uint16_t blue = hue.blue;
-
-      *lcd_pos = (red << 8) | (green << 3) | (blue >> 3);
+      IP888To565(img[i], &lcd_buf[i]);
     }
   }
 
-  return true;
+  return LCDPushColorImage(xpos, ypos, img_width, img_height, lcd_buf);
 }
 
 bool LCDPushGrayImage(int xpos, int ypos, int img_width, int img_height, gray img[])
@@ -241,6 +241,146 @@ bool LCDPushGrayImage(int xpos, int ypos, int img_width, int img_height, gray im
 
 bool LCDRefresh()
 {
-  tft.pushImage(0, 0, LCD_WIDTH, LCD_HEIGHT, lcd_buf);
   return true;
 }
+
+bool LCDClear()
+{
+  tft.fillScreen(TFT_BLACK);
+
+  return true;
+}
+
+bool LCDSetCursor(int xpos, int ypos)
+{
+  if (xpos < 0 || ypos < 0 || xpos > LCD_WIDTH || ypos > LCD_HEIGHT)
+    return false;
+
+  tft.setCursor(xpos, ypos);
+
+  return true;
+}
+
+bool LCDGetCursor(int *xpos, int *ypos)
+{
+  *xpos = tft.getCursorX();
+  *ypos = tft.getCursorY();
+
+  return true;
+}
+
+bool LCDSetFont(int font)
+{
+  if (font > 0xff)
+    return false;
+  
+  tft.setTextFont(font);
+
+  return true;
+}
+
+bool LCDSetFontColor(rgb888 fg, rgb888 bg)
+{
+  rgb565 fg_hue = 0;
+  IP888To565(fg, &fg_hue);
+
+  rgb565 bg_hue = 0;
+  IP888To565(bg, &bg_hue);
+
+  tft.setTextColor(fg_hue, bg_hue);
+
+  return true;
+}
+
+bool LCDSetFontSize(int size)
+{
+  if (size <= 0 || size > 0xFF)
+    return false;
+
+  tft.setTextSize(size);
+
+  return true;
+}
+
+bool LCDPrint(const char *str)
+{
+  tft.print(str);
+
+  return true;
+}
+
+bool LCDPrintln(const char *str)
+{
+  tft.println(str);
+
+  return true;
+}
+
+bool LCDPrintAt(int xpos, int ypos, const char *str)
+{
+  tft.drawString(str, xpos, ypos);
+
+  return true;
+}
+
+bool LCDGetSize(int *lcd_width, int *lcd_height)
+{
+  *lcd_width = LCD_WIDTH;
+  *lcd_height = LCD_HEIGHT;
+
+  return true;
+}
+
+bool LCDSetPixel(int xpos, int ypos, rgb888 hue)
+{
+  rgb565 col = 0;
+  IP888To565(hue, &col);
+
+  tft.drawPixel(xpos, ypos, col);
+
+  return true;
+}
+
+bool LCDGetPixel(int xpos, int ypos, rgb888 *hue)
+{
+  rgb565 col = tft.readPixel(xpos, ypos);
+  IP565To888(col, hue);
+
+  return true;
+}
+
+bool LCDDrawLine(int xs, int ys, int xe, int ye, rgb888 hue)
+{
+  rgb565 col = 0;
+  IP888To565(hue, &col);
+
+  if (xs - xe == 0)
+    if (ys < ye)
+      tft.drawFastVLine(xs, ys, ye-ys, col);
+    else
+      tft.drawFastVLine(xs, ye, ys-ye, col);
+  else if (ys - ye == 0)
+    if (xs < xe)
+      tft.drawFastHLine(xs, ys, xe-xs, col);
+    else
+      tft.drawFastHLine(xe, ys, xs-xe, col);
+  else
+    tft.drawLine(xs, ys, xe, ye, col);
+
+  return true;
+}
+
+bool LCDDrawRect(int x, int y, int w, int h, rgb888 hue, bool fill)
+{
+  rgb565 col = 0;
+  IP888To565(hue, &col);
+
+  if (fill)
+    tft.fillRect(x, y, w, h, col);
+  else
+    tft.drawRect(x, y, w, h, col);
+
+  return true;
+}
+
+bool LCDDrawCircle(int x, int y, int radius, rgb888 hue, bool fill);

@@ -67,9 +67,22 @@ bool IPColorToGray(int img_width, int img_height, rgb888 col_img[], gray gray_im
 //Converts a RGB565 colour image to 8-bit grayscale
 bool IPColorToGray(int img_width, int img_height, rgb565 col_img[], gray gray_img[]);
 
+bool IP888To565(rgb888 in_hue, rgb565 *out_hue);
+
+bool IP565To888(rgb565 in_hue, rgb888 *out_hue);
+
 ////////////////
 //LCD Functions
 ////////////////
+
+extern const rgb888 RED;
+extern const rgb888 GREEN;
+extern const rgb888 BLUE;
+extern const rgb888 BLACK;
+extern const rgb888 WHITE;
+extern const rgb888 YELLOW;
+extern const rgb888 MAGENTA;
+extern const rgb888 CYAN;
 
 //Push RGB565 image to LCD buffer.
 bool LCDPushColorImage(int xpos, int ypos, int img_width, int img_height, rgb565 img[]);
@@ -86,31 +99,36 @@ bool LCDPushBinaryImage(int xpos, int ypos, int img_width, int img_height, bool 
 //Present LCD buffer to display
 bool LCDRefresh();
 
-bool LCDClear(int xpos = -1, int ypos = -1, int xs = -1, int ys = -1);
+bool LCDClear();
 
-bool LCDSetCursor(int xpos, int ypos);
+bool LCDSetCursor(int x, int y);
 
-bool LCDGetCursor(int *xpos, int *ypos);
+bool LCDGetCursor(int *x, int *y);
 
+//1 -> 8
 bool LCDSetFont(int font);
+
+bool LCDSetFontColor(rgb888 fg, rgb888 bg = {0, 0, 0, 0xFF});
 
 bool LCDSetFontSize(int size);
 
-bool LCDPrintf(const char *format, ...);
+bool LCDPrint(const char *str);
 
-bool LCDPrintfAt(int xpos, int ypos, const char *format, ...);
+bool LCDPrintln(const char *str);
+
+bool LCDPrintAt(int x, int y, const char *str);
 
 bool LCDGetSize(int *lcd_width, int *lcd_height);
 
-bool LCDSetPixel(int xpos, int ypos, rgb888 hue);
+bool LCDSetPixel(int x, int y, rgb888 hue);
 
-bool LCDGetPixel(int xpos, int ypos, rgb888 *hue);
+bool LCDGetPixel(int x, int y, rgb888 *hue);
 
-bool LCDDrawLine(int xstart, int ystart, int xfinish, int yfinish, rgb888 hue);
+bool LCDDrawLine(int xs, int ys, int xe, int ye, rgb888 hue);
 
-bool LCDDrawRect(int xstart, int ystart, int xfinish, int yfinish, rgb888 hue, bool fill = true);
+bool LCDDrawRect(int x, int y, int w, int h, rgb888 hue, bool fill = true);
 
-bool LCDDrawCircle(int xpos, int ypos, int radius, rgb888 hue, bool fill = true);
+bool LCDDrawCircle(int x, int y, int radius, rgb888 hue, bool fill = true);
 
 #endif
 
