@@ -60,9 +60,9 @@ bool EYEBOTInit()
   pinMode(CAM_SIGNAL_PIN, INPUT_PULLUP);
 
   //Initialize the SPI bus and add the ESP32-Camera as a device
-  esp_err_t ret = spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO);
+  esp_err_t ret = spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO);
   assert(ret == ESP_OK);
-  ret = spi_bus_add_device(SPI3_HOST, &devcfg, &cam_spi_handle);
+  ret = spi_bus_add_device(SPI2_HOST, &devcfg, &cam_spi_handle);
   assert(ret == ESP_OK);
   
   return true;
@@ -71,6 +71,31 @@ bool EYEBOTInit()
 ///////////////////
 //Camera Functions
 ///////////////////
+
+typedef uint16_t rgb565;
+
+static bool IPSwapEndianess(rgb565 *hue)
+{
+  uint16_t lower = (*hue & 0xFF00) >> 8;
+  *hue <<= 8;
+  *hue |= lower;
+
+  return true;
+}
+
+static bool IP888To565(rgb in_hue, rgb565 *out_hue)
+{
+  *out_hue = tft.color24to16(in_hue);
+
+  return true;
+}
+
+static bool IP565To888(rgb565 in_hue, rgb *out_hue)
+{
+  *out_hue = tft.color16to24(in_hue);
+
+  return true;
+}
 
 bool CAMGetImage(rgb565 imgbuf[])
 {
@@ -99,17 +124,22 @@ bool CAMGetImage(rgb565 imgbuf[])
 
     while (digitalRead(CAM_SIGNAL_PIN));
 
-    err = spi_device_transmit(cam_spi_handle, &t);
+    spi_device_transmit(cam_spi_handle, &t);
+  }
+
+  for (int i = 0; i < QQVGA_SIZE; i++)
+  {
+    IPSwapEndianess(&imgbuf[i]);
   }
 
   return true;
 }
 
-bool CAMGetImage(rgb888 imgbuf[])
+bool CAMGetImage(rgb imgbuf[])
 {
-  static rgb565 cam_buffer[QQVGA_SIZE];
+  static rgb565 cambuf[QQVGA_SIZE];
 
-  if (!CAMGetImage(cam_buffer))
+  if (!CAMGetImage(cambuf))
   {
     Serial.printf("Failed to get image from camera\n");
     return false;
@@ -122,7 +152,7 @@ bool CAMGetImage(rgb888 imgbuf[])
     {
       int i = row*QQVGA_WIDTH + col;
 
-      IP565To888(cam_buffer[i], &imgbuf[i]);
+      IP565To888(cambuf[i], &imgbuf[i]);
     }
   }
 
@@ -162,32 +192,308 @@ bool CAMChangeSettings(camera_settings settings)
 //Image Processing Functions
 /////////////////////////////
 
-bool IP888To565(rgb888 in_hue, rgb565 *out_hue)
-{
-  uint16_t red = in_hue.red;
-  red <<= 8;
-  uint16_t green = in_hue.green;
-  green <<= 3;
-  uint16_t blue = in_hue.blue;
-  blue >>= 3;
+#define MIN(a,b) (((a)<(b))?(a):(b))
+#define MAX(a,b) (((a)>(b))?(a):(b))
 
-  *out_hue = (red & 0xF800) | (green & 0x07E0) | blue;
+bool IPGetRGB(rgb hue, byte *r, byte *g, byte *b)
+{
+  *r = (hue >> 16) & 0xFF;
+  *g = (hue >> 8) & 0xFF;
+  *b = (hue) & 0xFF;
 
   return true;
 }
 
-bool IP565To888(rgb565 in_hue, rgb888 *out_hue)
+bool IPSetRGB(byte r, byte g, byte b, rgb *hue)
 {
-  out_hue->red = (in_hue & 0xF800) >> 8;
-  out_hue->green = (in_hue & 0x07E0) >> 3;
-  out_hue->blue = (in_hue & 0x001F) << 3;
-  out_hue->alpha = 0xFF;
+  rgb565 col = tft.color565(r, g, b);
+  IP565To888(col, hue);
 
   return true;
 }
 
-bool IPColorToGray(int img_width, int img_height, rgb888 col_img[], gray gray_img[])
+bool IPRGBToGrayscale(rgb hue, grayscale *gray)
 {
+  byte r, g, b;
+  IPGetRGB(hue, &r, &g, &b);
+
+  *gray = (r + g + b)/3;
+
+  return true;
+}
+
+bool IPRGBToGrayscale(rgb col, rgb *gray)
+{
+  grayscale val = 0;
+  IPRGBToGrayscale(col, &val);
+
+  IPGrayscaleToRGB(val, gray);
+
+  return true;
+}
+
+bool IPRGBToGrayscale(int img_width, int img_height, const rgb col_img[], grayscale gray_img[])
+{
+  for (int y = 0; y < img_height; y++)
+  {
+    for (int x = 0; x < img_width; x++)
+    {
+      int i = y*img_width + x;
+
+      IPRGBToGrayscale(col_img[i], &gray_img[i]);
+    }
+  }
+
+  return true;
+}
+
+bool IPRGBToGrayscale(int img_width, int img_height, const rgb col_img[], rgb gray_img[])
+{
+  for (int y = 0; y < img_height; y++)
+  {
+    for (int x = 0; x < img_width; x++)
+    {
+      int i = y*img_width + x;
+
+      IPRGBToGrayscale(col_img[i], &gray_img[i]);
+    }
+  }
+
+  return true;
+}
+
+bool IPGrayscaleToRGB(grayscale gray, rgb *col)
+{
+  IPSetRGB(gray, gray, gray, col);
+
+  return true;
+}
+
+bool IPGrayscaleToRGB(int img_width, int img_height, const grayscale gray_img[], rgb col_img[])
+{
+  for (int y = 0; y < img_height; y++)
+  {
+    for (int x = 0; x < img_width; x++)
+    {
+      int i = y*img_width + x;
+
+      IPGrayscaleToRGB(gray_img[i], &col_img[i]);
+    }
+  }
+
+  return true;
+}
+
+#define INTENSITY_THRESHOLD 10
+
+// Transform RGB pixel to HSI
+bool IPRGBToHSI(rgb col, hsi *value)
+{
+  byte r, g, b;
+  IPGetRGB(col, &r, &g, &b);
+
+  byte max   = MAX(r, MAX(g, b));
+  byte min   = MIN(r, MIN(g, b));
+  byte delta = max - min;
+
+  value->intensity = (r + g + b)/3;
+
+  if (value->intensity > 0) 
+    value->saturation = 255 - (255 * min)/(value->intensity);
+  else 
+    value->saturation = 0;
+
+  if ((2*delta > max) && (value->intensity > INTENSITY_THRESHOLD))
+  { 
+    if (r == max) 
+      value->hue =  43 + 42*(g-b)/delta; // +/-42 [  1.. 85]
+    else if (g == max) 
+      value->hue = 128 + 42*(b-r)/delta; // +/-42 [ 86..170]
+    else if (b == max) 
+      value->hue = 213 + 42*(r-g)/delta; // +/-42 [171..255]
+  }
+  else 
+    value->hue = 0; // grayscale, not color
+
+  return true;
+}
+
+bool IPRGBToHSI(int img_width, int img_height, const rgb img[], hsi values[])
+{
+  for (int y = 0; y < img_height; y++)
+  {
+    for (int x = 0; x < img_width; x++)
+    {
+      int i = y*img_width + x;
+
+      IPRGBToHSI(img[i], &values[i]);
+    }
+  }
+
+  return true;
+}
+
+bool IPLaplace(int img_width, int img_height, const grayscale *in, grayscale *out)
+{
+  for (int y = 1; y < img_height - 1; y++)
+  {
+    for (int x = 1; x < img_width - 1; x++)
+    {
+      int i = y*img_width + x;
+
+      int delta = abs(4*in[i] - in[i-1] - in[i+1] - in[i-img_width] - in[i+img_width]);
+
+      if (delta > 0xFF) 
+        delta = 0xFF;
+
+      out[i] = (grayscale)delta;
+    }
+  }
+
+  return true;
+}
+
+bool IPSobel(int img_width, int img_height, const grayscale *in, grayscale *out)
+{
+  memset(out, 0, img_width); // clear first row
+
+  for (int y = 1; y < img_height-1; y++)
+  {
+    for (int x = 1; x < img_width-1; x++)
+    {
+      int i = y*img_width + x;
+
+      int deltaX = 2*in[i+1] + in[i-img_width+1] + in[i+img_width+1] - 2*in[i-1] - in[i-img_width-1] - in[i+img_width-1];
+      int deltaY = in[i-img_width-1] + 2*in[i-img_width] + in[i-img_width+1] - in[i+img_width-1] - 2*in[i+img_width] - in[i+img_width+1];
+
+
+      int grad = (abs(deltaX) + abs(deltaY)) / 3;
+      if (grad > 0xFF) 
+        grad = 0xFF;
+
+      out[i] = (grayscale)grad;
+    }
+  }
+
+  memset(out + (img_height-1)*(img_width), 0, img_width);
+
+  return true;
+}
+
+bool IPOverlay(int width, int height, int intensity_threshold, const rgb bg[], const rgb fg[], rgb out[])
+{
+  intensity_threshold = intensity_threshold < 0 || intensity_threshold >= 255 ? 0 : intensity_threshold;
+
+  for (int y = 0; y < height; y++)
+  {
+    for (int x = 0; x < width; x++)
+    {
+      int i = y*width + x;
+
+      byte r = 0, g = 0, b = 0;
+      IPGetRGB(fg[i], &r, &g, &b);
+
+      int intensity = (r + g + b)/3;
+
+      out[i] = intensity > intensity_threshold ? fg[i] : bg[i];
+    }
+  }
+
+  return true;
+}
+
+bool IPOverlay(int width, int height, int intensity_threshold, rgb overlay_color, const rgb bg[], const grayscale fg[], rgb out[])
+{
+  intensity_threshold = intensity_threshold < 0 || intensity_threshold >= 255 ? 0 : intensity_threshold;
+
+  byte r = 0, g = 0, b = 0;
+  IPGetRGB(overlay_color, &r, &g, &b);
+
+  for (int y = 0; y < height; y++)
+  {
+    for (int x = 0; x < width; x++)
+    {
+      int i = y*width + x;
+
+      if (fg[i] > intensity_threshold)
+      {
+        float intensity = fg[i] / 255.0f;
+        float red = r * intensity;
+        float green = g * intensity;
+        float blue = b * intensity;
+
+        rgb new_overlay_col = 0;
+        IPSetRGB((byte)red, (byte)green, (byte)blue, &new_overlay_col);
+
+        out[i] = new_overlay_col;
+      }
+      else
+      {
+        out[i] = bg[i];
+      }
+    }
+  }
+
+  return true;
+}
+
+bool IPOverlay(int width, int height, int intensity_threshold, rgb overlay_color, const grayscale bg[], const grayscale fg[], rgb out[])
+{
+  intensity_threshold = intensity_threshold < 0 || intensity_threshold >= 255 ? 0 : intensity_threshold;
+
+  byte r = 0, g = 0, b = 0;
+  IPGetRGB(overlay_color, &r, &g, &b);
+
+  for (int y = 0; y < height; y++)
+  {
+    for (int x = 0; x < width; x++)
+    {
+      int i = y*width + x;
+
+      if (fg[i] > intensity_threshold)
+      {
+        float intensity = fg[i] / 255.0f;
+        float red = r * intensity;
+        float green = g * intensity;
+        float blue = b * intensity;
+
+        rgb new_overlay_col = 0;
+        IPSetRGB((byte)red, (byte)green, (byte)blue, &new_overlay_col);
+
+        out[i] = new_overlay_col;
+      }
+      else
+      {
+        IPSetRGB(bg[i], bg[i], bg[i], &out[i]);
+      }
+    }
+  }
+
+  return true;
+}
+
+bool IPOverlay(int width, int height, int intensity_threshold, const grayscale bg[], const rgb fg[], rgb out[])
+{
+  intensity_threshold = intensity_threshold < 0 || intensity_threshold >= 255 ? 0 : intensity_threshold;
+
+  for (int y = 0; y < height; y++)
+  {
+    for (int x = 0; x < width; x++)
+    {
+      int i = y*width + x;
+
+      byte r = 0, g = 0, b = 0;
+      IPGetRGB(fg[i], &r, &g, &b);
+
+      int intensity = (r + g + b)/3;
+      
+      if (intensity > intensity_threshold)
+        out[i] = fg[i];
+      else
+        IPSetRGB(bg[i], bg[i], bg[i], &out[i]);
+    }
+  }
+
   return true;
 }
 
@@ -195,28 +501,18 @@ bool IPColorToGray(int img_width, int img_height, rgb888 col_img[], gray gray_im
 //LCD Functions
 ////////////////
 
-const rgb888 RED = {0xFF, 0, 0, 0xFF};
-const rgb888 GREEN = {0, 0xFF, 0, 0xFF};
-const rgb888 BLUE = {0, 0, 0xFF, 0xFF};
-const rgb888 BLACK = {0, 0, 0, 0xFF};
-const rgb888 WHITE = {0xFF, 0xFF, 0xFF, 0xFF};
-const rgb888 YELLOW = {0xFF, 0xFF, 0, 0xFF};
-const rgb888 MAGENTA = {0xFF, 0, 0xFF, 0xFF};
-const rgb888 CYAN = {0, 0xFF, 0xFF, 0xFF};
+const rgb RED = 0xFF0000;
+const rgb GREEN = 0x00FF00;
+const rgb BLUE = 0x0000FF;
+const rgb BLACK = 0;
+const rgb WHITE = 0xFFFFFF;
+const rgb YELLOW = 0xFFFF00;
+const rgb MAGENTA = 0xFF00FF;
+const rgb CYAN = 0x00FFFF;
 
 static rgb565 lcd_buf[LCD_HEIGHT*LCD_WIDTH];
 
-bool LCDPushColorImage(int xpos, int ypos, int img_width, int img_height, rgb565 img[])
-{
-  if (img_width < 0 || img_height < 0)
-    return false;
-
-  tft.pushImage(xpos, ypos, img_width, img_height, img);
-
-  return true;
-}
-
-bool LCDPushColorImage(int xpos, int ypos, int img_width, int img_height, rgb888 img[])
+bool LCDDrawImage(int xpos, int ypos, int img_width, int img_height, const rgb img[])
 {
   if (img_width < 0 || img_height < 0 || (img_width*img_height) > (LCD_WIDTH*LCD_HEIGHT))
     return false;
@@ -228,14 +524,36 @@ bool LCDPushColorImage(int xpos, int ypos, int img_width, int img_height, rgb888
       int i = y*img_width + x;
 
       IP888To565(img[i], &lcd_buf[i]);
+      IPSwapEndianess(&lcd_buf[i]);
     }
   }
 
-  return LCDPushColorImage(xpos, ypos, img_width, img_height, lcd_buf);
+  tft.pushRect(xpos, ypos, img_width, img_height, lcd_buf);
+
+  return true;
 }
 
-bool LCDPushGrayImage(int xpos, int ypos, int img_width, int img_height, gray img[])
+bool LCDDrawImage(int xpos, int ypos, int img_width, int img_height, const grayscale img[])
 {
+  if (img_width < 0 || img_height < 0 || (img_width*img_height) > (LCD_WIDTH*LCD_HEIGHT))
+    return false;
+
+  for (int y = 0; y < img_height; y++)
+  {
+    for (int x = 0; x < img_width; x++)
+    {
+      int i = y*img_width + x;
+
+      rgb pix = 0;
+      IPSetRGB(img[i], img[i], img[i], &pix);
+
+      IP888To565(pix, &lcd_buf[i]);
+      IPSwapEndianess(&lcd_buf[i]);
+    }
+  }
+
+  tft.pushRect(xpos, ypos, img_width, img_height, lcd_buf);
+
   return true;
 }
 
@@ -279,7 +597,7 @@ bool LCDSetFont(int font)
   return true;
 }
 
-bool LCDSetFontColor(rgb888 fg, rgb888 bg)
+bool LCDSetFontColor(rgb fg, rgb bg)
 {
   rgb565 fg_hue = 0;
   IP888To565(fg, &fg_hue);
@@ -331,7 +649,7 @@ bool LCDGetSize(int *lcd_width, int *lcd_height)
   return true;
 }
 
-bool LCDSetPixel(int xpos, int ypos, rgb888 hue)
+bool LCDSetPixel(int xpos, int ypos, rgb hue)
 {
   rgb565 col = 0;
   IP888To565(hue, &col);
@@ -341,7 +659,7 @@ bool LCDSetPixel(int xpos, int ypos, rgb888 hue)
   return true;
 }
 
-bool LCDGetPixel(int xpos, int ypos, rgb888 *hue)
+bool LCDGetPixel(int xpos, int ypos, rgb *hue)
 {
   rgb565 col = tft.readPixel(xpos, ypos);
   IP565To888(col, hue);
@@ -349,7 +667,7 @@ bool LCDGetPixel(int xpos, int ypos, rgb888 *hue)
   return true;
 }
 
-bool LCDDrawLine(int xs, int ys, int xe, int ye, rgb888 hue)
+bool LCDDrawLine(int xs, int ys, int xe, int ye, rgb hue)
 {
   rgb565 col = 0;
   IP888To565(hue, &col);
@@ -370,7 +688,7 @@ bool LCDDrawLine(int xs, int ys, int xe, int ye, rgb888 hue)
   return true;
 }
 
-bool LCDDrawRect(int x, int y, int w, int h, rgb888 hue, bool fill)
+bool LCDDrawRect(int x, int y, int w, int h, rgb hue, bool fill)
 {
   rgb565 col = 0;
   IP888To565(hue, &col);
@@ -383,4 +701,15 @@ bool LCDDrawRect(int x, int y, int w, int h, rgb888 hue, bool fill)
   return true;
 }
 
-bool LCDDrawCircle(int x, int y, int radius, rgb888 hue, bool fill);
+bool LCDDrawCircle(int x, int y, int radius, rgb hue, bool fill)
+{
+  rgb565 col = 0;
+  IP888To565(hue, &col);
+
+  if (fill)
+    tft.fillCircle(x, y, radius, col);
+  else 
+    tft.drawCircle(x, y, radius, col);
+  
+  return false;
+}
