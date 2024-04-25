@@ -21,8 +21,6 @@ bool EYEBOTInit();
 #define QQVGA_HEIGHT 120
 #define QQVGA_SIZE QQVGA_WIDTH*QQVGA_HEIGHT
 
-#define QQVGA_RGB565_BUFFER_SIZE QQVGA_SIZE*2
-
 typedef uint8_t byte; 
 typedef byte grayscale;
 typedef uint32_t rgb;
@@ -33,7 +31,7 @@ typedef struct {
   byte intensity;
 } __attribute__((aligned(4))) hsi;
 
-typedef struct {
+typedef struct camera_settings {
   //-2 to 2
   int8_t brightness;
   //-2 to 2
@@ -149,6 +147,46 @@ bool LCDDrawLine(int xs, int ys, int xe, int ye, rgb hue);
 bool LCDDrawRect(int x, int y, int w, int h, rgb hue, bool fill = true);
 
 bool LCDDrawCircle(int x, int y, int radius, rgb hue, bool fill = true);
+
+///////////////////
+// Input Functions
+///////////////////
+
+enum button {
+  LEFT_BUTTON,
+  RIGHT_BUTTON
+};
+
+typedef void (*button_callback) ();
+
+//Non-blocking
+bool INReadButton(button b, bool *pressed);
+
+//Blocking
+bool INWaitForButtonPress(button b);
+
+//Blocking
+bool INWaitForButtonRelease(button b);
+
+/**
+ * Triggers whenever the button's state changes, both rising and falling.
+ * 
+ * Excerpt taken from https://www.arduino.cc/reference/en/language/functions/external-interrupts/attachinterrupt/:
+ * 
+ * "Generally, an ISR should be as short and fast as possible. If your sketch uses multiple ISRs, 
+ * only one can run at a time, other interrupts will be executed after the current one finishes 
+ * in an order that depends on the priority they have. millis() relies on interrupts to count, so 
+ * it will never increment inside an ISR. Since delay() requires interrupts to work, it will not 
+ * work if called inside an ISR. micros() works initially but will start behaving erratically after 
+ * 1-2 ms. delayMicroseconds() does not use any counter, so it will work as normal.
+ * Typically global variables are used to pass data between an ISR and the main program. 
+ * 
+ * To make sure variables shared between an ISR and the main program are updated correctly, 
+ * declare them as volatile."
+*/
+bool INSetButtonCallback(button b, button_callback cb);
+
+bool INClearButtonCallback(button b);
 
 #endif
 

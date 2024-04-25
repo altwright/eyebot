@@ -1,24 +1,43 @@
 #include "eyebot.h"
 #include <Arduino.h>
 #include <math.h>
+#include <driver/spi_master.h>
+#include <TFT_eSPI.h>
 
-#define SPI_MOSI_PIN 43
-#define SPI_MISO_PIN 44
-#define SPI_CS_PIN 18
-#define SPI_SCLK_PIN 17
-#define CAM_SIGNAL_PIN 21
+//Camera Pins
+#define PIN_SPI_MOSI 43
+#define PIN_SPI_MISO 44
+#define PIN_SPI_CS 18
+#define PIN_SPI_SCLK 17
+#define PIN_CAM_SIGNAL 21
+
+#define PIN_LEFT_BUTTON 0
+#define PIN_RIGHT_BUTTON 14
+
+#define CAM_NUM_IMAGE_SEGMENTS 8
+#define QQVGA_RGB565_BUFFER_SIZE QQVGA_SIZE*2
 
 ////////////////
 //Core Functions
 ////////////////
 
-#include <driver/spi_master.h>
-#include <TFT_eSPI.h>
-
-#define CAM_NUM_IMAGE_SEGMENTS 8
-
 static TFT_eSPI tft = TFT_eSPI(LCD_WIDTH, LCD_HEIGHT);
 static spi_device_handle_t cam_spi_handle;
+
+static button_callback left_button_cb = NULL;
+static button_callback right_button_cb = NULL;
+
+static void default_left_button_cb()
+{
+  if (left_button_cb)
+      left_button_cb();
+}
+
+static void default_right_button_cb()
+{
+  if (right_button_cb)
+      right_button_cb();
+}
 
 bool EYEBOTInit()
 {
@@ -34,9 +53,9 @@ bool EYEBOTInit()
 
   //Configuration for the SPI bus
   spi_bus_config_t buscfg = {
-    .mosi_io_num = SPI_MOSI_PIN,
-    .miso_io_num = SPI_MISO_PIN,
-    .sclk_io_num = SPI_SCLK_PIN,
+    .mosi_io_num = PIN_SPI_MOSI,
+    .miso_io_num = PIN_SPI_MISO,
+    .sclk_io_num = PIN_SPI_SCLK,
     .quadwp_io_num = -1,
     .quadhd_io_num = -1,
     .max_transfer_sz = QQVGA_RGB565_BUFFER_SIZE/CAM_NUM_IMAGE_SEGMENTS // < Max SPI transation size
@@ -51,13 +70,13 @@ bool EYEBOTInit()
     .duty_cycle_pos = 0,    //50% duty cycle
     .cs_ena_posttrans = 3,  //Keep the CS low 3 cycles after transaction, to stop slave from missing the last bit when CS has less propagation delay than CLK
     .clock_speed_hz = SPI_MASTER_FREQ_10M,
-    .spics_io_num = SPI_CS_PIN,
+    .spics_io_num = PIN_SPI_CS,
     .queue_size = 1
   };
 
-  pinMode(SPI_SCLK_PIN, OUTPUT);
-  pinMode(SPI_CS_PIN, OUTPUT);
-  pinMode(CAM_SIGNAL_PIN, INPUT_PULLUP);
+  pinMode(PIN_SPI_SCLK, OUTPUT);
+  pinMode(PIN_SPI_CS, OUTPUT);
+  pinMode(PIN_CAM_SIGNAL, INPUT_PULLUP);
 
   //Initialize the SPI bus and add the ESP32-Camera as a device
   esp_err_t ret = spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO);
@@ -65,6 +84,13 @@ bool EYEBOTInit()
   ret = spi_bus_add_device(SPI2_HOST, &devcfg, &cam_spi_handle);
   assert(ret == ESP_OK);
   
+  ///////////////////////////////
+  //Set default button callbacks
+  ///////////////////////////////
+
+  attachInterrupt(digitalPinToInterrupt(PIN_LEFT_BUTTON), default_left_button_cb, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(PIN_RIGHT_BUTTON), default_right_button_cb, CHANGE);
+
   return true;
 }
 
@@ -97,7 +123,7 @@ static bool IP565To888(rgb565 in_hue, rgb *out_hue)
   return true;
 }
 
-bool CAMGetImage(rgb565 imgbuf[])
+static bool CAMGetImage(rgb565 imgbuf[])
 {
   uint32_t command = 1;
   //Send command byte zero to get image
@@ -106,7 +132,7 @@ bool CAMGetImage(rgb565 imgbuf[])
   t.tx_buffer = &command;
   t.rx_buffer = NULL;
 
-  while (digitalRead(CAM_SIGNAL_PIN));
+  while (digitalRead(PIN_CAM_SIGNAL));
 
   esp_err_t err = spi_device_transmit(cam_spi_handle, &t);
   if (err != ESP_OK)
@@ -122,7 +148,7 @@ bool CAMGetImage(rgb565 imgbuf[])
     t.tx_buffer = NULL;
     t.rx_buffer = buffer + i*(QQVGA_RGB565_BUFFER_SIZE/CAM_NUM_IMAGE_SEGMENTS);
 
-    while (digitalRead(CAM_SIGNAL_PIN));
+    while (digitalRead(PIN_CAM_SIGNAL));
 
     spi_device_transmit(cam_spi_handle, &t);
   }
@@ -168,7 +194,7 @@ bool CAMChangeSettings(camera_settings settings)
   t.tx_buffer = &command;
   t.rx_buffer = NULL;
 
-  while (digitalRead(CAM_SIGNAL_PIN));
+  while (digitalRead(PIN_CAM_SIGNAL));
 
   esp_err_t err = spi_device_transmit(cam_spi_handle, &t);
   if (err != ESP_OK)
@@ -179,7 +205,7 @@ bool CAMChangeSettings(camera_settings settings)
   t.tx_buffer = &settings;
   t.rx_buffer = NULL;
 
-  while (digitalRead(CAM_SIGNAL_PIN));
+  while (digitalRead(PIN_CAM_SIGNAL));
 
   err = spi_device_transmit(cam_spi_handle, &t);
   if (err != ESP_OK)
@@ -712,4 +738,91 @@ bool LCDDrawCircle(int x, int y, int radius, rgb hue, bool fill)
     tft.drawCircle(x, y, radius, col);
   
   return false;
+}
+
+///////////////////
+// Input Functions
+///////////////////
+
+static int INGetButtonPin(button b)
+{
+  int pin;
+  switch (b)
+  {
+    case LEFT_BUTTON:
+      pin = PIN_LEFT_BUTTON;
+      break;
+    case RIGHT_BUTTON:
+      pin = PIN_RIGHT_BUTTON;
+      break;
+    default: 
+      pin = -1;
+      break;
+  }
+
+  return pin;
+}
+
+bool INReadButton(button b, bool *pressed)
+{
+  int pin = INGetButtonPin(b);
+
+  if (digitalRead(pin))
+    *pressed = false;
+  else
+    *pressed = true;
+
+  return true;
+}
+
+bool INWaitForButtonPress(button b)
+{
+  int pin = INGetButtonPin(b);
+
+  while (digitalRead(pin));
+
+  return true;
+}
+
+bool INWaitForButtonRelease(button b)
+{
+  int pin = INGetButtonPin(b);
+
+  while (!digitalRead(pin));
+
+  return true;
+}
+
+bool INSetButtonCallback(button b, button_callback cb)
+{
+  switch (b)
+  {
+    case LEFT_BUTTON:
+      left_button_cb = cb;
+      break;
+    case RIGHT_BUTTON:
+      right_button_cb = cb;
+      break;
+    default: 
+      break;
+  }
+
+  return true;
+}
+
+bool INClearButtonCallback(button b)
+{
+  switch (b)
+  {
+    case LEFT_BUTTON:
+      left_button_cb = NULL;
+      break;
+    case RIGHT_BUTTON:
+      right_button_cb = NULL;
+      break;
+    default: 
+      break;
+  }
+
+  return true;
 }
