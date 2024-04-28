@@ -1,8 +1,12 @@
 #include "eyebot.h"
+
 #include <Arduino.h>
 #include <math.h>
 #include <driver/spi_master.h>
 #include <TFT_eSPI.h>
+#include <arduino-timer.h>
+
+#define PIN_BATTERY_POWER 15
 
 //Camera Pins
 #define PIN_SPI_MOSI 43
@@ -11,11 +15,20 @@
 #define PIN_SPI_SCLK 17
 #define PIN_CAM_SIGNAL 21
 
+//Button Pins
 #define PIN_LEFT_BUTTON 0
 #define PIN_RIGHT_BUTTON 14
 
+//Motor Pins
+#define PIN_LEFT_MOTOR_FORWARD 1
+#define PIN_LEFT_MOTOR_BACKWARD 2
+#define PIN_RIGHT_MOTOR_FORWARD 10
+#define PIN_RIGHT_MOTOR_BACKWARD 3
+
 #define CAM_NUM_IMAGE_SEGMENTS 8
 #define QQVGA_RGB565_BUFFER_SIZE QQVGA_SIZE*2
+
+typedef uint32_t u32;
 
 ////////////////
 //Core Functions
@@ -23,6 +36,18 @@
 
 static TFT_eSPI tft = TFT_eSPI(LCD_WIDTH, LCD_HEIGHT);
 static spi_device_handle_t cam_spi_handle;
+
+static Timer<1> timer = {};
+
+static bool timer_handler_kill_motors(void *arg)
+{
+  analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
+  analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
+  analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
+  analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
+
+  return false;//don't repeat
+}
 
 static button_callback left_button_cb = NULL;
 static button_callback right_button_cb = NULL;
@@ -41,6 +66,22 @@ static void default_right_button_cb()
 
 bool EYEBOTInit()
 {
+  /////////////
+  //Motor init
+  /////////////
+
+  analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
+  analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
+  analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
+  analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
+
+  /////////////////////////////////////
+  // Enable being powered by a battery
+  /////////////////////////////////////
+
+  //pinMode(PIN_BATTERY_POWER, OUTPUT);
+  //digitalWrite(PIN_BATTERY_POWER, HIGH);
+
   //////////////////////
   //Initialise T-Display
   //////////////////////
@@ -824,5 +865,292 @@ bool INClearButtonCallback(button b)
       break;
   }
 
+  return true;
+}
+
+//////////////////////////
+//Motor-Driving Functions
+//////////////////////////
+
+static int left_motor_offset = 0;
+static int right_motor_offset = 0;
+static int left_motor_pwm = 0;
+static int right_motor_pwm = 0;
+
+static unsigned long set_speed_start_time = 0;
+
+// mm/s
+static int max_linear_speed = 340;
+// degrees/s
+static int max_angular_speed = 180;
+
+bool DRVSetMotorOffsets(int left_offset, int right_offset)
+{
+  left_motor_offset = left_offset < -255 || left_offset > 255 ? 0 : left_offset;
+  right_motor_offset = right_offset < -255 || right_offset > 255 ? 0 : right_offset;
+
+  return true;
+}
+
+bool DRVSetMaxLinearSpeed(int max_speed)
+{
+  max_linear_speed = max_speed < 0 ? 0 : max_speed;
+
+  return true;
+}
+
+bool DRVSetMaxAngularSpeed(int max_speed)
+{
+  max_angular_speed = max_speed < 0 ? 0 : max_speed;
+
+  return true;
+}
+
+// Non-blocking. Set fixed linear speed  (negative for reverse) [mm/s] and 
+// clockwise angular speed (negative for anti-clockwise) [degrees/s]
+bool DRVSetSpeed(int lin_speed, int ang_speed)
+{
+  if (lin_speed < -1 * max_linear_speed)
+    lin_speed = -1 * max_linear_speed;
+  
+  if (lin_speed > max_linear_speed)
+    lin_speed = max_linear_speed;
+  
+  if (ang_speed < -1 * max_angular_speed)
+    ang_speed = -1 * max_angular_speed;
+  
+  if (ang_speed > max_angular_speed)
+    ang_speed = max_angular_speed;
+
+  bool reverse = lin_speed >= 0 ? false : true;
+  if (reverse)
+    lin_speed *= -1;
+
+  bool clockwise = ang_speed >= 0 ? true : false;
+  if (!clockwise)
+    ang_speed *= -1;
+  
+  float ang_speed_percentage = ang_speed / (float)max_angular_speed;
+
+  if (lin_speed != 0)
+  {
+    float lin_speed_percentage = lin_speed / (float)max_linear_speed;
+    int motor_pwm = 255 * lin_speed_percentage;
+
+    left_motor_pwm = motor_pwm + left_motor_offset;
+    right_motor_pwm = motor_pwm + right_motor_offset;
+
+    if (left_motor_pwm < 0)
+      left_motor_pwm = 0;
+    
+    if (left_motor_pwm > 255)
+      left_motor_pwm = 255;
+    
+    if (right_motor_pwm < 0)
+      right_motor_pwm = 0;
+
+    if (right_motor_pwm > 255)
+      right_motor_pwm = 255;
+
+    int ang_pwm_offset = 255 * ang_speed_percentage;
+
+    if (clockwise)
+    {
+      right_motor_pwm -= ang_pwm_offset;
+      if (right_motor_pwm < 0)
+        right_motor_pwm = 0;
+    }
+    else
+    {
+      left_motor_pwm -= ang_pwm_offset;
+      if (left_motor_pwm < 0)
+        left_motor_pwm = 0;
+    }
+
+    if (reverse)
+    {
+      analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
+      analogWrite(PIN_LEFT_MOTOR_BACKWARD, left_motor_pwm);
+      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
+      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, right_motor_pwm);
+    }
+    else
+    {
+      analogWrite(PIN_LEFT_MOTOR_FORWARD, left_motor_pwm);
+      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
+      analogWrite(PIN_RIGHT_MOTOR_FORWARD, right_motor_pwm);
+      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
+    }
+  }
+  else
+  {
+    if (clockwise)
+    {
+      analogWrite(PIN_LEFT_MOTOR_FORWARD, 255 * ang_speed_percentage);
+      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
+      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
+      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 255 * ang_speed_percentage);
+    }
+    else
+    {
+      analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
+      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 255 * ang_speed_percentage);
+      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 255 * ang_speed_percentage);
+      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
+    }
+  }
+
+  return true;
+}     
+
+bool DRVSetPosition(int x, int y, int angle)
+{
+  return true;
+}
+
+bool DRVGetPosition(int *x, int *y, int *angle)
+{
+  return true;
+}
+
+bool DRVStraight(int dist, int speed)
+{
+  if (speed <= 0)
+    return false;
+  
+  if (speed > max_linear_speed)
+    speed = max_linear_speed;
+
+  bool reverse = dist < 0 ? true : false;
+  
+  if (reverse)
+  {
+    DRVSetSpeed(-1*speed, 0);
+    dist *= -1;
+  }
+  else
+    DRVSetSpeed(speed, 0);
+
+  //ms
+  float time_taken = (dist / (float)speed) * 1000;
+
+  delay((unsigned long)time_taken);
+
+  DRVSetSpeed(0, 0);
+  
+  return true;
+}
+
+bool DRVTurn(int angle, int speed)
+{
+  if (speed <= 0)
+    return false;
+  
+  if (speed > max_angular_speed)
+    speed = max_angular_speed;
+  
+  bool clockwise = angle < 0 ? false : true;
+
+  if (clockwise)
+    DRVSetSpeed(0, speed);
+  else
+  {
+    DRVSetSpeed(0, -1*speed);
+    angle *= -1;
+  }
+  
+  float time_taken = (angle / (float)speed) * 1000;
+
+  delay((unsigned long)time_taken);
+
+  DRVSetSpeed(0, 0);
+
+  return true;
+}
+
+bool DRVCurve(int dist, int angle, int lin_speed)
+{
+  if (lin_speed < 0)
+    return false;
+  
+  if (lin_speed > max_linear_speed)
+    lin_speed = max_linear_speed;
+  
+  bool reverse = dist < 0 ? true : false;
+  bool clockwise = angle >= 0 ? true : false;
+
+  if (reverse)
+    dist *= -1;
+
+  float time_taken = dist / (float)lin_speed;
+  int ang_speed = angle / time_taken;
+
+  if (clockwise)
+  {
+    if (ang_speed > max_angular_speed)
+      ang_speed = max_angular_speed;
+  }
+  else
+  {
+    if (ang_speed < -1*max_angular_speed)
+      ang_speed = -1*max_angular_speed;
+  }
+
+  if (reverse)
+    DRVSetSpeed(-1*lin_speed, ang_speed);
+  else
+    DRVSetSpeed(lin_speed, ang_speed);
+  
+  time_taken *= 1000;
+  delay((unsigned long)time_taken);
+
+  DRVSetSpeed(0, 0);
+
+  return true;
+}
+
+bool DRVGoTo(int dx, int dy, int speed)
+{
+  if (speed < 0)
+    return false;
+
+  if (dx != 0)
+  {
+    float angle_comp = atanf(dy/(float)dx);
+
+    int angle = 0;
+
+    if (dx >= 0)
+      angle = 90 - (angle_comp*180/M_PI);
+    else
+      angle = -90 - (angle_comp*180/M_PI);
+    
+    DRVTurn(angle, max_angular_speed);
+  }
+
+  //Pythagoras
+  int dist = (int)sqrtf(powf((float)dx, 2) + powf((float)dy, 2));
+  DRVStraight(dist, speed);
+
+  return true;
+}
+
+bool DRVRemaining(int *dist)
+{
+  return true;
+}
+
+bool DRVDone()
+{
+  return true;
+}
+
+bool DRVWait()
+{
+  return true;
+}
+
+bool DRVStalled(int *motor)
+{
   return true;
 }
