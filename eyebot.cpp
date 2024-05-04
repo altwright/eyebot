@@ -3,8 +3,8 @@
 #include <Arduino.h>
 #include <math.h>
 #include <driver/spi_master.h>
+#include <driver/timer.h>
 #include <TFT_eSPI.h>
-#include <arduino-timer.h>
 
 #define PIN_BATTERY_POWER 15
 
@@ -29,6 +29,7 @@
 #define QQVGA_RGB565_BUFFER_SIZE QQVGA_SIZE*2
 
 typedef uint32_t u32;
+typedef uint64_t u64;
 
 ////////////////
 //Core Functions
@@ -37,16 +38,30 @@ typedef uint32_t u32;
 static TFT_eSPI tft = TFT_eSPI(LCD_WIDTH, LCD_HEIGHT);
 static spi_device_handle_t cam_spi_handle;
 
-static Timer<1> timer = {};
+enum drive_op
+{
+  DRV_OP_STRAIGHT,
+  DRV_OP_TURN,
+  DRV_OP_CURVE,
+  DRV_OP_GOTO,
+  DRV_OP_NONE
+};
 
-static bool timer_handler_kill_motors(void *arg)
+static volatile drive_op current_drv_op = DRV_OP_NONE;
+
+static timer_group_t timer_group = TIMER_GROUP_0;
+static timer_idx_t motor_timer_idx = TIMER_0;
+
+static bool motor_timer_kill_cb(void *arg)
 {
   analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
   analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
   analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
   analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
 
-  return false;//don't repeat
+  current_drv_op = DRV_OP_NONE;
+
+  return true;
 }
 
 static button_callback left_button_cb = NULL;
@@ -120,10 +135,10 @@ bool EYEBOTInit()
   pinMode(PIN_CAM_SIGNAL, INPUT_PULLUP);
 
   //Initialize the SPI bus and add the ESP32-Camera as a device
-  esp_err_t ret = spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO);
-  assert(ret == ESP_OK);
-  ret = spi_bus_add_device(SPI2_HOST, &devcfg, &cam_spi_handle);
-  assert(ret == ESP_OK);
+  esp_err_t err = spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO);
+  assert(err == ESP_OK);
+  err = spi_bus_add_device(SPI2_HOST, &devcfg, &cam_spi_handle);
+  assert(err == ESP_OK);
   
   ///////////////////////////////
   //Set default button callbacks
@@ -131,6 +146,24 @@ bool EYEBOTInit()
 
   attachInterrupt(digitalPinToInterrupt(PIN_LEFT_BUTTON), default_left_button_cb, CHANGE);
   attachInterrupt(digitalPinToInterrupt(PIN_RIGHT_BUTTON), default_right_button_cb, CHANGE);
+
+  ///////////////////
+  //Initialise timer
+  ///////////////////
+
+  timer_config_t timer_config = {};
+  timer_config.alarm_en = TIMER_ALARM_DIS;
+  timer_config.counter_en = TIMER_PAUSE;
+  timer_config.intr_type = TIMER_INTR_LEVEL;
+  timer_config.counter_dir = TIMER_COUNT_DOWN;
+  timer_config.auto_reload = TIMER_AUTORELOAD_DIS;
+  timer_config.divider = 40000;//Decrements 80 MHz/40000 = 2000 times a second
+
+  err = timer_init(timer_group, motor_timer_idx, &timer_config);
+  assert(err == ESP_OK);
+
+  err = timer_isr_callback_add(timer_group, motor_timer_idx, motor_timer_kill_cb, NULL, 0);
+  assert(err == ESP_OK);
 
   return true;
 }
@@ -204,6 +237,9 @@ static bool CAMGetImage(rgb565 imgbuf[])
 
 bool CAMGetImage(rgb imgbuf[])
 {
+  if (!imgbuf)
+    return false;
+
   static rgb565 cambuf[QQVGA_SIZE];
 
   if (!CAMGetImage(cambuf))
@@ -264,6 +300,9 @@ bool CAMChangeSettings(camera_settings settings)
 
 bool IPGetRGB(rgb hue, byte *r, byte *g, byte *b)
 {
+  if (!r || !g || !b)
+    return false;
+
   *r = (hue >> 16) & 0xFF;
   *g = (hue >> 8) & 0xFF;
   *b = (hue) & 0xFF;
@@ -273,6 +312,9 @@ bool IPGetRGB(rgb hue, byte *r, byte *g, byte *b)
 
 bool IPSetRGB(byte r, byte g, byte b, rgb *hue)
 {
+  if (!hue)
+    return false;
+
   rgb565 col = tft.color565(r, g, b);
   IP565To888(col, hue);
 
@@ -281,6 +323,9 @@ bool IPSetRGB(byte r, byte g, byte b, rgb *hue)
 
 bool IPRGBToGrayscale(rgb hue, grayscale *gray)
 {
+  if (!gray)
+    return false;
+
   byte r, g, b;
   IPGetRGB(hue, &r, &g, &b);
 
@@ -291,6 +336,9 @@ bool IPRGBToGrayscale(rgb hue, grayscale *gray)
 
 bool IPRGBToGrayscale(rgb col, rgb *gray)
 {
+  if (!gray)
+    return false;
+
   grayscale val = 0;
   IPRGBToGrayscale(col, &val);
 
@@ -301,6 +349,9 @@ bool IPRGBToGrayscale(rgb col, rgb *gray)
 
 bool IPRGBToGrayscale(int img_width, int img_height, const rgb col_img[], grayscale gray_img[])
 {
+  if (!col_img || !gray_img)
+    return false;
+
   for (int y = 0; y < img_height; y++)
   {
     for (int x = 0; x < img_width; x++)
@@ -316,6 +367,9 @@ bool IPRGBToGrayscale(int img_width, int img_height, const rgb col_img[], graysc
 
 bool IPRGBToGrayscale(int img_width, int img_height, const rgb col_img[], rgb gray_img[])
 {
+  if (!col_img || !gray_img)
+    return false;
+
   for (int y = 0; y < img_height; y++)
   {
     for (int x = 0; x < img_width; x++)
@@ -331,6 +385,9 @@ bool IPRGBToGrayscale(int img_width, int img_height, const rgb col_img[], rgb gr
 
 bool IPGrayscaleToRGB(grayscale gray, rgb *col)
 {
+  if (!col)
+    return false;
+
   IPSetRGB(gray, gray, gray, col);
 
   return true;
@@ -338,6 +395,9 @@ bool IPGrayscaleToRGB(grayscale gray, rgb *col)
 
 bool IPGrayscaleToRGB(int img_width, int img_height, const grayscale gray_img[], rgb col_img[])
 {
+  if (!gray_img || !col_img)
+    return false;
+
   for (int y = 0; y < img_height; y++)
   {
     for (int x = 0; x < img_width; x++)
@@ -356,6 +416,9 @@ bool IPGrayscaleToRGB(int img_width, int img_height, const grayscale gray_img[],
 // Transform RGB pixel to HSI
 bool IPRGBToHSI(rgb col, hsi *value)
 {
+  if (!value)
+    return false;
+
   byte r, g, b;
   IPGetRGB(col, &r, &g, &b);
 
@@ -387,6 +450,9 @@ bool IPRGBToHSI(rgb col, hsi *value)
 
 bool IPRGBToHSI(int img_width, int img_height, const rgb img[], hsi values[])
 {
+  if (!img || !values)
+    return false;
+
   for (int y = 0; y < img_height; y++)
   {
     for (int x = 0; x < img_width; x++)
@@ -402,6 +468,9 @@ bool IPRGBToHSI(int img_width, int img_height, const rgb img[], hsi values[])
 
 bool IPLaplace(int img_width, int img_height, const grayscale *in, grayscale *out)
 {
+  if (!in || !out)
+    return false;
+
   for (int y = 1; y < img_height - 1; y++)
   {
     for (int x = 1; x < img_width - 1; x++)
@@ -422,6 +491,9 @@ bool IPLaplace(int img_width, int img_height, const grayscale *in, grayscale *ou
 
 bool IPSobel(int img_width, int img_height, const grayscale *in, grayscale *out)
 {
+  if (!in || !out)
+    return false;
+
   memset(out, 0, img_width); // clear first row
 
   for (int y = 1; y < img_height-1; y++)
@@ -449,6 +521,9 @@ bool IPSobel(int img_width, int img_height, const grayscale *in, grayscale *out)
 
 bool IPOverlay(int width, int height, int intensity_threshold, const rgb bg[], const rgb fg[], rgb out[])
 {
+  if (!bg || !fg || !out)
+    return false;
+
   intensity_threshold = intensity_threshold < 0 || intensity_threshold >= 255 ? 0 : intensity_threshold;
 
   for (int y = 0; y < height; y++)
@@ -471,6 +546,9 @@ bool IPOverlay(int width, int height, int intensity_threshold, const rgb bg[], c
 
 bool IPOverlay(int width, int height, int intensity_threshold, rgb overlay_color, const rgb bg[], const grayscale fg[], rgb out[])
 {
+  if (!bg || !fg || !out)
+    return false;
+
   intensity_threshold = intensity_threshold < 0 || intensity_threshold >= 255 ? 0 : intensity_threshold;
 
   byte r = 0, g = 0, b = 0;
@@ -506,6 +584,9 @@ bool IPOverlay(int width, int height, int intensity_threshold, rgb overlay_color
 
 bool IPOverlay(int width, int height, int intensity_threshold, rgb overlay_color, const grayscale bg[], const grayscale fg[], rgb out[])
 {
+  if (!bg || !fg || !out)
+    return false;
+
   intensity_threshold = intensity_threshold < 0 || intensity_threshold >= 255 ? 0 : intensity_threshold;
 
   byte r = 0, g = 0, b = 0;
@@ -541,6 +622,9 @@ bool IPOverlay(int width, int height, int intensity_threshold, rgb overlay_color
 
 bool IPOverlay(int width, int height, int intensity_threshold, const grayscale bg[], const rgb fg[], rgb out[])
 {
+  if (!bg || !fg || !out)
+    return false;
+
   intensity_threshold = intensity_threshold < 0 || intensity_threshold >= 255 ? 0 : intensity_threshold;
 
   for (int y = 0; y < height; y++)
@@ -581,6 +665,9 @@ static rgb565 lcd_buf[LCD_HEIGHT*LCD_WIDTH];
 
 bool LCDDrawImage(int xpos, int ypos, int img_width, int img_height, const rgb img[])
 {
+  if (!img)
+    return false;
+
   if (img_width < 0 || img_height < 0 || (img_width*img_height) > (LCD_WIDTH*LCD_HEIGHT))
     return false;
 
@@ -602,6 +689,9 @@ bool LCDDrawImage(int xpos, int ypos, int img_width, int img_height, const rgb i
 
 bool LCDDrawImage(int xpos, int ypos, int img_width, int img_height, const grayscale img[])
 {
+  if (!img)
+    return false;
+
   if (img_width < 0 || img_height < 0 || (img_width*img_height) > (LCD_WIDTH*LCD_HEIGHT))
     return false;
 
@@ -648,6 +738,9 @@ bool LCDSetCursor(int xpos, int ypos)
 
 bool LCDGetCursor(int *xpos, int *ypos)
 {
+  if (!xpos || !ypos)
+    return false;
+
   *xpos = tft.getCursorX();
   *ypos = tft.getCursorY();
 
@@ -689,6 +782,9 @@ bool LCDSetFontSize(int size)
 
 bool LCDPrint(const char *str)
 {
+  if (!str)
+    return false;
+
   tft.print(str);
 
   return true;
@@ -696,6 +792,9 @@ bool LCDPrint(const char *str)
 
 bool LCDPrintln(const char *str)
 {
+  if (!str)
+    return false;
+
   tft.println(str);
 
   return true;
@@ -703,6 +802,9 @@ bool LCDPrintln(const char *str)
 
 bool LCDPrintAt(int xpos, int ypos, const char *str)
 {
+  if (!str)
+    return false;
+
   tft.drawString(str, xpos, ypos);
 
   return true;
@@ -710,6 +812,9 @@ bool LCDPrintAt(int xpos, int ypos, const char *str)
 
 bool LCDGetSize(int *lcd_width, int *lcd_height)
 {
+  if (!lcd_width || !lcd_height)
+    return false;
+
   *lcd_width = LCD_WIDTH;
   *lcd_height = LCD_HEIGHT;
 
@@ -728,6 +833,9 @@ bool LCDSetPixel(int xpos, int ypos, rgb hue)
 
 bool LCDGetPixel(int xpos, int ypos, rgb *hue)
 {
+  if (!hue)
+    return false;
+
   rgb565 col = tft.readPixel(xpos, ypos);
   IP565To888(col, hue);
 
@@ -806,6 +914,9 @@ static int INGetButtonPin(button b)
 
 bool INReadButton(button b, bool *pressed)
 {
+  if (!pressed)
+    return false;
+
   int pin = INGetButtonPin(b);
 
   if (digitalRead(pin))
@@ -836,6 +947,9 @@ bool INWaitForButtonRelease(button b)
 
 bool INSetButtonCallback(button b, button_callback cb)
 {
+  if (!cb)
+    return false;
+
   switch (b)
   {
     case LEFT_BUTTON:
@@ -884,6 +998,13 @@ static int max_linear_speed = 340;
 // degrees/s
 static int max_angular_speed = 180;
 
+static int eyebot_xpos = 0;
+static int eyebot_ypos = 0;
+static int eyebot_angle = 0;
+static int eyebot_lin_speed = 0;
+static int eyebot_ang_speed = 0;
+static unsigned long eyebot_op_start = 0;
+
 bool DRVSetMotorOffsets(int left_offset, int right_offset)
 {
   left_motor_offset = left_offset < -255 || left_offset > 255 ? 0 : left_offset;
@@ -906,10 +1027,32 @@ bool DRVSetMaxAngularSpeed(int max_speed)
   return true;
 }
 
-// Non-blocking. Set fixed linear speed  (negative for reverse) [mm/s] and 
-// clockwise angular speed (negative for anti-clockwise) [degrees/s]
+bool DRVSetPosition(int x, int y, int angle)
+{
+  return false;
+}
+
+bool DRVGetPosition(int *x, int *y, int *angle)
+{
+  if (!x || !y || !angle)
+    return false;
+
+  if (current_drv_op == DRV_OP_NONE)
+  {
+
+  }
+  else
+  {
+
+  }
+
+  return true;
+}
+
 bool DRVSetSpeed(int lin_speed, int ang_speed)
 {
+  DRVKill();
+
   if (lin_speed < -1 * max_linear_speed)
     lin_speed = -1 * max_linear_speed;
   
@@ -984,18 +1127,20 @@ bool DRVSetSpeed(int lin_speed, int ang_speed)
   }
   else
   {
+    // When turning on spot, angular speed is inherently doubled, since
+    // it only assumes that it is pivoting around a stationary wheel.
     if (clockwise)
     {
-      analogWrite(PIN_LEFT_MOTOR_FORWARD, 255 * ang_speed_percentage);
+      analogWrite(PIN_LEFT_MOTOR_FORWARD, 255 * ang_speed_percentage / 2);
       analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
       analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
-      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 255 * ang_speed_percentage);
+      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 255 * ang_speed_percentage / 2);
     }
     else
     {
       analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
-      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 255 * ang_speed_percentage);
-      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 255 * ang_speed_percentage);
+      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 255 * ang_speed_percentage / 2);
+      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 255 * ang_speed_percentage / 2);
       analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
     }
   }
@@ -1003,13 +1148,25 @@ bool DRVSetSpeed(int lin_speed, int ang_speed)
   return true;
 }     
 
-bool DRVSetPosition(int x, int y, int angle)
+static bool SetMotorKillTimer(u64 time_ms)
 {
-  return true;
-}
+  esp_err_t err;
+  if (err = timer_pause(timer_group, motor_timer_idx))
+    return false;
 
-bool DRVGetPosition(int *x, int *y, int *angle)
-{
+  //Assumes 2000 decrements per s
+  if (err = timer_set_counter_value(timer_group, motor_timer_idx, 2*(u64)time_ms))
+    return false;
+
+  if (err = timer_set_alarm_value(timer_group, motor_timer_idx, 0))
+    return false;
+
+  if (err = timer_set_alarm(timer_group, motor_timer_idx, TIMER_ALARM_EN))
+    return false;
+
+  if (err = timer_start(timer_group, motor_timer_idx))
+    return false;
+
   return true;
 }
 
@@ -1034,10 +1191,11 @@ bool DRVStraight(int dist, int speed)
   //ms
   float time_taken = (dist / (float)speed) * 1000;
 
-  delay((unsigned long)time_taken);
+  if (!SetMotorKillTimer((u64)time_taken))
+    return false;
 
-  DRVSetSpeed(0, 0);
-  
+  current_drv_op = DRV_OP_STRAIGHT;
+
   return true;
 }
 
@@ -1061,9 +1219,10 @@ bool DRVTurn(int angle, int speed)
   
   float time_taken = (angle / (float)speed) * 1000;
 
-  delay((unsigned long)time_taken);
+  if (!SetMotorKillTimer((u64)time_taken))
+    return false;
 
-  DRVSetSpeed(0, 0);
+  current_drv_op = DRV_OP_TURN;
 
   return true;
 }
@@ -1102,55 +1261,124 @@ bool DRVCurve(int dist, int angle, int lin_speed)
     DRVSetSpeed(lin_speed, ang_speed);
   
   time_taken *= 1000;
-  delay((unsigned long)time_taken);
 
-  DRVSetSpeed(0, 0);
+  if (!SetMotorKillTimer((u64)time_taken))
+    return false;
+
+  current_drv_op = DRV_OP_CURVE;
 
   return true;
 }
 
 bool DRVGoTo(int dx, int dy, int speed)
 {
-  if (speed < 0)
+  if (speed <= 0 || dy == 0)
     return false;
 
   if (dx != 0)
   {
-    float angle_comp = atanf(dy/(float)dx);
+    bool reverse = dy < 0 ? true : false;
+    bool right = dx >= 0 ? true : false;
 
-    int angle = 0;
+    int abs_dy = abs(dy);
+    int abs_dx = abs(dx);
 
-    if (dx >= 0)
-      angle = 90 - (angle_comp*180/M_PI);
+    if (abs_dy < abs_dx)
+    {
+      if (right)
+        dx = abs_dy;
+      else
+        dx = -1*abs_dy;
+    }
+
+    float ratio = abs_dx / (float)abs_dy;
+    float rads = asinf(ratio);
+
+    float radius = abs_dy / sinf(rads);
+
+    int arc_l = radius * rads;
+    int degrees = (rads * 180/M_PI);
+
+    if (reverse)
+    {
+      if (right)
+        DRVCurve(-1*arc_l, degrees, speed);
+      else 
+        DRVCurve(-1*arc_l, -1*degrees, speed);
+    }
     else
-      angle = -90 - (angle_comp*180/M_PI);
-    
-    DRVTurn(angle, max_angular_speed);
-  }
+    {
+      if (right)
+        DRVCurve(arc_l, degrees, speed);
+      else 
+        DRVCurve(arc_l, -1*degrees, speed);
+    }
 
-  //Pythagoras
-  int dist = (int)sqrtf(powf((float)dx, 2) + powf((float)dy, 2));
-  DRVStraight(dist, speed);
+    Serial.printf("arc_l: %d\n", arc_l);
+    Serial.printf("degrees: %d\n", degrees);
+  }
+  else
+    DRVStraight(dy, speed);
+
+  current_drv_op = DRV_OP_GOTO;
 
   return true;
 }
 
 bool DRVRemaining(int *dist)
 {
+  switch (current_drv_op)
+  {
+    case DRV_OP_STRAIGHT:
+    {
+      break;
+    }
+    case DRV_OP_TURN:
+    {
+      break;
+    }
+    case DRV_OP_CURVE:
+    {
+      break;
+    }
+    case DRV_OP_GOTO:
+    {
+      break;
+    }
+    default:
+    {
+      if (dist)
+        *dist = -1;
+      return false;
+    }
+  }
+
   return true;
 }
 
 bool DRVDone()
 {
-  return true;
+  if (current_drv_op != DRV_OP_NONE)
+    return true;
+  else
+    return false;
 }
 
 bool DRVWait()
 {
+  while (current_drv_op != DRV_OP_NONE);
+
   return true;
 }
 
-bool DRVStalled(int *motor)
+bool DRVKill()
 {
+  analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
+  analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
+  analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
+  analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
+
+  current_drv_op = DRV_OP_NONE;
+
   return true;
 }

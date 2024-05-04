@@ -116,7 +116,7 @@ bool LCDDrawImage(int xpos, int ypos, int img_width, int img_height, const rgb i
 //Push 8-bit grayscale image to LCD buffer.
 bool LCDDrawImage(int xpos, int ypos, int img_width, int img_height, const grayscale img[]);
 
-bool LCDRefresh();
+//bool LCDRefresh();
 
 bool LCDClear();
 
@@ -201,7 +201,7 @@ bool DRVSetMaxLinearSpeed(int max_lin_speed);
 //[0, 180] degrees/s
 bool DRVSetMaxAngularSpeed(int max_ang_speed);
 
-// Non-blocking. Set fixed linear speed  [mm/s] and angular speed [degrees/s]
+// Set fixed linear speed  [mm/s] and angular speed [degrees/s].
 bool DRVSetSpeed(int lin_speed, int ang_speed);     
 
 // Set eyebot position to x, y [mm] and forward-facing angle (0-180, negative for counter-clockwise) [degrees]
@@ -210,21 +210,21 @@ bool DRVSetPosition(int x, int y, int angle);
 // Get estimate of eyebot position as x and y [mm], and forward-facing angle (0-180, negative for counter-clockwise) [degrees]
 bool DRVGetPosition(int *x, int *y, int *angle);    
 
-// Drive straight distance (negative for reverse) [mm] at speed (>0) [mm/s]
+// Drive straight distance (negative for reverse) [mm] at speed (>0) [mm/s].
 bool DRVStraight(int dist, int speed);        
 
-// Turn on spot angle (negative for anti-clockwise) [degrees] at speed (>0) [degrees/s]
+// Turn on spot angle (negative for anti-clockwise) [degrees] at speed (>0) [degrees/s].
 bool DRVTurn(int angle, int speed);           
 
 // Drive curve for distance (negative for reverse) [mm] at linear speed (>0) [mm/s]. 
 // Transition to final orienation angle (negative for anti-clockwise) [degrees].
 bool DRVCurve(int dist, int angle, int lin_speed);
 
-// Blocking call. Drive dx [mm] right (negative for left) and dy [mm] forward (negative for reverse), 
-// speed (>0) [mm/s]
+// Drive dx [mm] right (negative for left) and dy [mm] forward (negative for reverse), 
+// speed > 0 [mm/s]. |y| >= |x|, y != 0.
 bool DRVGoTo(int dx, int dy, int speed);     
 
-// Return remaining drive distance in [mm].
+// Return remaining drive distance of current drive op in [mm]. Returns false if there is no current drive op.
 bool DRVRemaining(int *dist);                             
 
 // Returns false if drive operation is not finished
@@ -233,7 +233,7 @@ bool DRVDone();
 // Block until drive operation has finished
 bool DRVWait();                               
 
-// Cancel current drive operation. Returns false if no current drive operation.
+// Cancel current drive operation and stop motors.
 bool DRVKill();
 
 #endif
