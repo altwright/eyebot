@@ -204,19 +204,19 @@ bool DRVSetMaxAngularSpeed(int max_ang_speed);
 // Set fixed linear speed  [mm/s] and angular speed [degrees/s].
 bool DRVSetSpeed(int lin_speed, int ang_speed);     
 
-// Set eyebot position to x, y [mm] and forward-facing angle (0-180, negative for counter-clockwise) [degrees]
+// Set eyebot position to x, y [mm] and forward-facing angle (negative for counter-clockwise) [degrees]
 bool DRVSetPosition(int x, int y, int angle);       
 
-// Get estimate of eyebot position as x and y [mm], and forward-facing angle (0-180, negative for counter-clockwise) [degrees]
+// Get estimate of eyebot position as x and y [mm], and forward-facing angle (negative for counter-clockwise) [degrees]
 bool DRVGetPosition(int *x, int *y, int *angle);    
 
-// Drive straight distance (negative for reverse) [mm] at speed (>0) [mm/s].
+// Drive straight distance (negative for reverse) [mm] at speed > 0 [mm/s].
 bool DRVStraight(int dist, int speed);        
 
-// Turn on spot angle (negative for anti-clockwise) [degrees] at speed (>0) [degrees/s].
+// Turn on spot angle (negative for anti-clockwise) [degrees] at speed > 0 [degrees/s].
 bool DRVTurn(int angle, int speed);           
 
-// Drive curve for distance (negative for reverse) [mm] at linear speed (>0) [mm/s]. 
+// Drive curve for distance (negative for reverse) [mm] at linear speed > 0 [mm/s]. 
 // Transition to final orienation angle (negative for anti-clockwise) [degrees].
 bool DRVCurve(int dist, int angle, int lin_speed);
 
@@ -233,8 +233,16 @@ bool DRVDone();
 // Block until drive operation has finished
 bool DRVWait();                               
 
-// Cancel current drive operation and stop motors.
-bool DRVKill();
+/////////////////////////////////////////////
+// Position Sensitive Device (PSD) Functions
+/////////////////////////////////////////////
+
+// Read distance value in mm (20-400) from distance sensor.
+// Closer than 20 mm inverts distance reading, greater than 400 mm returns -1 in dist.
+bool PSDGet(int *dist);
+
+// Read raw value from distance sensor
+bool PSDGetRaw(int *val);                         
 
 #endif
 

@@ -25,6 +25,9 @@
 #define PIN_RIGHT_MOTOR_FORWARD 10
 #define PIN_RIGHT_MOTOR_BACKWARD 3
 
+//PSD Pin
+#define PIN_DIST_SENSOR 16
+
 #define CAM_NUM_IMAGE_SEGMENTS 8
 #define QQVGA_RGB565_BUFFER_SIZE QQVGA_SIZE*2
 
@@ -43,7 +46,6 @@ enum drive_op
   DRV_OP_STRAIGHT,
   DRV_OP_TURN,
   DRV_OP_CURVE,
-  DRV_OP_GOTO,
   DRV_OP_NONE
 };
 
@@ -54,10 +56,7 @@ static timer_idx_t motor_timer_idx = TIMER_0;
 
 static bool motor_timer_kill_cb(void *arg)
 {
-  analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
-  analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
-  analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
-  analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
+  DRVSetSpeed(0, 0);
 
   current_drv_op = DRV_OP_NONE;
 
@@ -155,7 +154,7 @@ bool EYEBOTInit()
   timer_config.alarm_en = TIMER_ALARM_DIS;
   timer_config.counter_en = TIMER_PAUSE;
   timer_config.intr_type = TIMER_INTR_LEVEL;
-  timer_config.counter_dir = TIMER_COUNT_DOWN;
+  timer_config.counter_dir = TIMER_COUNT_UP;
   timer_config.auto_reload = TIMER_AUTORELOAD_DIS;
   timer_config.divider = 40000;//Decrements 80 MHz/40000 = 2000 times a second
 
@@ -998,12 +997,11 @@ static int max_linear_speed = 340;
 // degrees/s
 static int max_angular_speed = 180;
 
-static int eyebot_xpos = 0;
-static int eyebot_ypos = 0;
-static int eyebot_angle = 0;
-static int eyebot_lin_speed = 0;
-static int eyebot_ang_speed = 0;
-static unsigned long eyebot_op_start = 0;
+static volatile int eyebot_xpos = 0, eyebot_ypos = 0, eyebot_angle = 0;
+static volatile int eyebot_lin_speed = 0;
+static volatile int eyebot_ang_speed = 0;
+static volatile unsigned long eyebot_op_total_time = 0;
+static volatile unsigned long eyebot_op_start_time = 0;
 
 bool DRVSetMotorOffsets(int left_offset, int right_offset)
 {
@@ -1029,6 +1027,10 @@ bool DRVSetMaxAngularSpeed(int max_speed)
 
 bool DRVSetPosition(int x, int y, int angle)
 {
+  eyebot_xpos = x;
+  eyebot_ypos = y;
+  eyebot_angle = angle;
+
   return false;
 }
 
@@ -1036,14 +1038,52 @@ bool DRVGetPosition(int *x, int *y, int *angle)
 {
   if (!x || !y || !angle)
     return false;
+  
+  unsigned long delta = millis() - eyebot_op_start_time;
 
-  if (current_drv_op == DRV_OP_NONE)
+  switch (current_drv_op)
   {
+    case DRV_OP_NONE:
+    case DRV_OP_STRAIGHT:
+    case DRV_OP_CURVE:
+    {
+      float delta_arc = eyebot_lin_speed * (delta / 1000.0f);
+      float eyebot_angle_rad = eyebot_angle * M_PI / 180.0f;
+      float delta_degrees = eyebot_ang_speed * (delta / 1000.0f);
 
-  }
-  else
-  {
+      int dx = 0, dy = 0;
+      if (eyebot_ang_speed != 0 && delta != 0)
+      {
+        float delta_rad = delta_degrees * M_PI / 180.0f;
+        float radius = delta_arc / delta_rad;
 
+        dy = radius * sinf(eyebot_angle_rad + delta_rad);
+        dx = radius - (radius * cosf(eyebot_angle_rad + delta_rad));
+      }
+      else
+      {
+        dy = delta_arc * cosf(eyebot_angle_rad);
+        dx = delta_arc * sinf(eyebot_angle_rad);
+      }
+
+      *x = eyebot_xpos + dx;
+      *y = eyebot_ypos + dy;
+      *angle = eyebot_angle + delta_degrees;
+
+      break;
+    }
+    case DRV_OP_TURN:
+    {
+      float delta_degrees = eyebot_ang_speed * (delta / 1000.0f);
+
+      *x = eyebot_xpos;
+      *y = eyebot_ypos;
+      *angle = eyebot_angle + delta_degrees;
+
+      break;
+    }
+    default:
+      return false;
   }
 
   return true;
@@ -1051,7 +1091,10 @@ bool DRVGetPosition(int *x, int *y, int *angle)
 
 bool DRVSetSpeed(int lin_speed, int ang_speed)
 {
-  DRVKill();
+  // Set current eyebot position
+  int x, y, angle;
+  DRVGetPosition(&x, &y, &angle);
+  DRVSetPosition(x, y, angle);
 
   if (lin_speed < -1 * max_linear_speed)
     lin_speed = -1 * max_linear_speed;
@@ -1064,6 +1107,9 @@ bool DRVSetSpeed(int lin_speed, int ang_speed)
   
   if (ang_speed > max_angular_speed)
     ang_speed = max_angular_speed;
+
+  eyebot_lin_speed = lin_speed;
+  eyebot_ang_speed = ang_speed;
 
   bool reverse = lin_speed >= 0 ? false : true;
   if (reverse)
@@ -1129,21 +1175,26 @@ bool DRVSetSpeed(int lin_speed, int ang_speed)
   {
     // When turning on spot, angular speed is inherently doubled, since
     // it only assumes that it is pivoting around a stationary wheel.
+    ang_speed_percentage /= 2;
+
     if (clockwise)
     {
-      analogWrite(PIN_LEFT_MOTOR_FORWARD, 255 * ang_speed_percentage / 2);
+      analogWrite(PIN_LEFT_MOTOR_FORWARD, 255 * ang_speed_percentage);
       analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
       analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
-      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 255 * ang_speed_percentage / 2);
+      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 255 * ang_speed_percentage);
     }
     else
     {
       analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
-      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 255 * ang_speed_percentage / 2);
-      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 255 * ang_speed_percentage / 2);
+      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 255 * ang_speed_percentage);
+      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 255 * ang_speed_percentage);
       analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
     }
   }
+
+  eyebot_op_start_time = millis();
+  eyebot_op_total_time = -1;//Could be infinite
 
   return true;
 }     
@@ -1154,11 +1205,11 @@ static bool SetMotorKillTimer(u64 time_ms)
   if (err = timer_pause(timer_group, motor_timer_idx))
     return false;
 
-  //Assumes 2000 decrements per s
-  if (err = timer_set_counter_value(timer_group, motor_timer_idx, 2*(u64)time_ms))
+  //Assumes 2000 increments per s
+  if (err = timer_set_counter_value(timer_group, motor_timer_idx, 0))
     return false;
 
-  if (err = timer_set_alarm_value(timer_group, motor_timer_idx, 0))
+  if (err = timer_set_alarm_value(timer_group, motor_timer_idx, 2*(u64)time_ms))
     return false;
 
   if (err = timer_set_alarm(timer_group, motor_timer_idx, TIMER_ALARM_EN))
@@ -1193,6 +1244,8 @@ bool DRVStraight(int dist, int speed)
 
   if (!SetMotorKillTimer((u64)time_taken))
     return false;
+  
+  eyebot_op_total_time = time_taken;
 
   current_drv_op = DRV_OP_STRAIGHT;
 
@@ -1221,6 +1274,8 @@ bool DRVTurn(int angle, int speed)
 
   if (!SetMotorKillTimer((u64)time_taken))
     return false;
+
+  eyebot_op_total_time = time_taken;
 
   current_drv_op = DRV_OP_TURN;
 
@@ -1264,6 +1319,8 @@ bool DRVCurve(int dist, int angle, int lin_speed)
 
   if (!SetMotorKillTimer((u64)time_taken))
     return false;
+
+  eyebot_op_total_time = time_taken;
 
   current_drv_op = DRV_OP_CURVE;
 
@@ -1313,42 +1370,36 @@ bool DRVGoTo(int dx, int dy, int speed)
       else 
         DRVCurve(arc_l, -1*degrees, speed);
     }
-
-    Serial.printf("arc_l: %d\n", arc_l);
-    Serial.printf("degrees: %d\n", degrees);
   }
   else
     DRVStraight(dy, speed);
-
-  current_drv_op = DRV_OP_GOTO;
 
   return true;
 }
 
 bool DRVRemaining(int *dist)
 {
+  if (!dist)
+    return false;
+
   switch (current_drv_op)
   {
     case DRV_OP_STRAIGHT:
+    case DRV_OP_CURVE:
     {
+      unsigned long op_time_delta = millis() - eyebot_op_start_time;
+      int total_dist = eyebot_op_total_time * abs(eyebot_lin_speed) / 1000;
+      *dist = total_dist - (op_time_delta * abs(eyebot_lin_speed) / 1000);
       break;
     }
     case DRV_OP_TURN:
     {
-      break;
-    }
-    case DRV_OP_CURVE:
-    {
-      break;
-    }
-    case DRV_OP_GOTO:
-    {
+      *dist = 0;
       break;
     }
     default:
     {
-      if (dist)
-        *dist = -1;
+      *dist = -1;
       return false;
     }
   }
@@ -1359,9 +1410,9 @@ bool DRVRemaining(int *dist)
 bool DRVDone()
 {
   if (current_drv_op != DRV_OP_NONE)
-    return true;
-  else
     return false;
+  else
+    return true;
 }
 
 bool DRVWait()
@@ -1371,14 +1422,87 @@ bool DRVWait()
   return true;
 }
 
-bool DRVKill()
-{
-  analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
-  analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
-  analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
-  analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
+/////////////////////////////////////////////
+// Position Sensitive Device (PSD) Functions
+/////////////////////////////////////////////
 
-  current_drv_op = DRV_OP_NONE;
+// Read distance value in mm from distance sensor
+bool PSDGet(int *dist)
+{
+  if (!dist)
+    return false;
+  
+  //Max val is 4095
+  int val = analogRead(PIN_DIST_SENSOR);
+
+  if (val >= 2730)// 20-60 mm
+  {
+    int delta = val - 2730;
+    int val_range = 4095 - 2730;
+
+    float ratio = delta / (float)val_range;
+    
+    int dist_range = 60 - 20;
+
+    *dist = 60 - ratio * dist_range;
+  }
+  else if (val >= 1638)//60-100 mm
+  {
+    int delta = val - 1638;
+    int val_range = 2729 - 1638;
+
+    float ratio = delta / (float)val_range;
+    
+    int dist_range = 100 - 60;
+
+    *dist = 100 - ratio * dist_range;
+  }
+  else if (val >= 1092)//100-160 mm
+  {
+    int delta = val - 1092;
+    int val_range = 1637 - 1092;
+
+    float ratio = delta / (float)val_range;
+    
+    int dist_range = 160 - 100;
+
+    *dist = 160 - ratio * dist_range;
+  }
+  else if (val >= 682)//160-260 mm
+  {
+    int delta = val - 682;
+    int val_range = 1091 - 682;
+
+    float ratio = delta / (float)val_range;
+    
+    int dist_range = 260 - 160;
+
+    *dist = 260 - ratio * dist_range;
+  }
+  else if (val >= 409)//260-400 mm
+  {
+    int delta = val - 409;
+    int val_range = 681 - 409;
+
+    float ratio = delta / (float)val_range;
+    
+    int dist_range = 400 - 260;
+
+    *dist = 400 - ratio * dist_range;
+  }
+  else
+    *dist = -1;
 
   return true;
+}
+
+// Read raw value from distance sensor
+bool PSDGetRaw(int *val)
+{
+  if (!val)
+    return false;
+  
+  *val = analogRead(PIN_DIST_SENSOR);
+
+  return false;
 }
