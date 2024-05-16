@@ -116,7 +116,7 @@ bool LCDDrawImage(int xpos, int ypos, int img_width, int img_height, const rgb i
 //Push 8-bit grayscale image to LCD buffer.
 bool LCDDrawImage(int xpos, int ypos, int img_width, int img_height, const grayscale img[]);
 
-//bool LCDRefresh();
+bool LCDRefresh();
 
 bool LCDClear();
 
