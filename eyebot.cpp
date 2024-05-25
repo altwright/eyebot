@@ -33,7 +33,7 @@ using namespace fs;
 #define CAM_NUM_IMAGE_SEGMENTS 8
 #define QQVGA_RGB565_BUFFER_SIZE QQVGA_SIZE*2
 
-#define MAX_RX_SEGMENT_SIZE 4800
+#define MAX_RX_SEGMENT_SIZE 4096
 
 typedef uint32_t u32;
 typedef uint64_t u64;
@@ -297,49 +297,29 @@ bool CAMGetImage(rgb imgbuf[])
   esp_err_t err = spi_device_transmit(cam_spi_handle, &t);
   assert(err == ESP_OK);
 
-  if (jpeg_byte_count > QQVGA_RGB565_BUFFER_SIZE)
+  if (jpeg_byte_count > MAX_RX_SEGMENT_SIZE)
     return false;//A misread has happened
 
-  int rx_segment_count = jpeg_byte_count / MAX_RX_SEGMENT_SIZE;
-  int rx_remainder_byte_count = jpeg_byte_count % MAX_RX_SEGMENT_SIZE;
+  Serial.printf("jpeg bytes: %u\n", jpeg_byte_count);
 
   byte *jpeg_buffer = (byte*)lcd_buf;
 
-  for (int i = 0; i < rx_segment_count; i++)
-  {
-    t = {};
-    t.length = MAX_RX_SEGMENT_SIZE * 8;
-    t.tx_buffer = NULL;
-    t.rx_buffer = jpeg_buffer + i * MAX_RX_SEGMENT_SIZE;
+  memset(jpeg_buffer, 0, MAX_RX_SEGMENT_SIZE);
 
-    while (digitalRead(PIN_CAM_SIGNAL));
+  t = {};
+  t.length = MAX_RX_SEGMENT_SIZE * 8;
+  t.tx_buffer = NULL;
+  t.rx_buffer = jpeg_buffer;
 
-    err = spi_device_transmit(cam_spi_handle, &t);
-    assert(err == ESP_OK);
-  }
+  while (digitalRead(PIN_CAM_SIGNAL));
 
-  if (rx_remainder_byte_count != 0)
-  {
-    //int dword_remainder_bytes = rx_remainder_byte_count % sizeof(uint32_t);
-    //rx_remainder_byte_count += sizeof(uint32_t) - dword_remainder_bytes;
-
-    t = {};
-    t.length = rx_remainder_byte_count * 8;
-    t.tx_buffer = NULL;
-    t.rx_buffer = jpeg_buffer + rx_segment_count * MAX_RX_SEGMENT_SIZE;
-
-    while (digitalRead(PIN_CAM_SIGNAL));
-
-    err = spi_device_transmit(cam_spi_handle, &t);
-    assert(err == ESP_OK);
-  }
+  err = spi_device_transmit(cam_spi_handle, &t);
+  assert(err == ESP_OK);
 
   //For some reason the first byte is 7F instead of the FF required
   jpeg_buffer[0] = 0xFF;
 
-  Serial.printf("%x %x\n", jpeg_buffer[jpeg_byte_count - 2], jpeg_buffer[jpeg_byte_count - 1]);
-
-  if (!jpeg.openRAM(jpeg_buffer, jpeg_byte_count, jpeg_decode_cb))
+  if (!jpeg.openRAM(jpeg_buffer, MAX_RX_SEGMENT_SIZE, jpeg_decode_cb))
   {
     Serial.printf("Failed to read header info of JPEG\n");
     return false;

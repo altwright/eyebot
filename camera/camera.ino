@@ -32,7 +32,7 @@
 
 #define CAM_NUM_RGB565_IMAGE_SEGMENTS 8
 
-#define MAX_TX_SEGMENT_SIZE 4800
+#define MAX_TX_SEGMENT_SIZE 4096
 
 typedef struct {
   //-2 to 2
@@ -122,7 +122,7 @@ void setup() {
   config.pixel_format = PIXFORMAT_JPEG; //YUV422,GRAYSCALE,RGB565,JPEG
   config.frame_size = FRAMESIZE_QQVGA;
   config.fb_count = 1;
-  config.jpeg_quality = 16;
+  config.jpeg_quality = 12;
 
   ret = esp_camera_init(&config);
   if (ret != ESP_OK) {
@@ -145,23 +145,13 @@ void setup() {
 
 void loop() {
   camera_fb_t *fb = esp_camera_fb_get();
-  uint8_t *jpeg_bytes = (uint8_t*)fb->buf;
-  uint32_t *jpeg_dwords = (uint32_t*)fb->buf;
+  uint8_t *jpeg_bytes = fb->buf;
   uint32_t jpeg_byte_count = fb->len;
-  uint32_t *dma_dwords = (uint32_t*)dma_bytes;
 
   Serial.printf("jpeg bytes: %u\n", jpeg_byte_count);
 
-  int jpeg_dword_count = jpeg_byte_count / sizeof(uint32_t);
-
-  //Copy into DMA buffer, 4 bytes at a time
-  for (int i = 0; i < jpeg_dword_count; i++)
-    dma_dwords[i] = jpeg_dwords[i];
-  
-  int jpeg_remainder_bytes_count = jpeg_byte_count % sizeof(uint32_t);
-
-  for (int i = 0; i < jpeg_remainder_bytes_count; i++)
-    dma_bytes[jpeg_dword_count * sizeof(uint32_t) + i] = jpeg_bytes[jpeg_dword_count * sizeof(uint32_t) + i];
+  for (int i = 0; i < jpeg_byte_count; i++)
+    dma_bytes[i] = jpeg_bytes[i];
 
   spi_slave_transaction_t t = {};
   t.length = sizeof(uint32_t) * 8;
@@ -172,33 +162,13 @@ void loop() {
   esp_err_t err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
   assert(err == ESP_OK);
 
-  int tx_segment_count = jpeg_byte_count / MAX_TX_SEGMENT_SIZE;
-  //Transmit the JPEG image next
-  for (int i = 0; i < tx_segment_count; i++)
-  {
-    t = {};
-    t.length = MAX_TX_SEGMENT_SIZE * 8;
-    t.tx_buffer = dma_bytes + i * MAX_TX_SEGMENT_SIZE;
-    t.rx_buffer = NULL;
+  t = {};
+  t.length = MAX_TX_SEGMENT_SIZE * 8;
+  t.tx_buffer = dma_bytes;
+  t.rx_buffer = NULL;
 
-    err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
-    assert(err == ESP_OK);
-  } 
-
-  int jpeg_byte_remainder = jpeg_byte_count % MAX_TX_SEGMENT_SIZE;
-  if (jpeg_byte_remainder != 0)
-  {
-    //int dword_remainder = jpeg_byte_remainder % sizeof(uint32_t);
-    //jpeg_byte_remainder += sizeof(uint32_t) - dword_remainder;//Round up to 4-byte boundary for complete transmission
-
-    t = {};
-    t.length = jpeg_byte_remainder * 8;
-    t.tx_buffer = dma_bytes + tx_segment_count * MAX_TX_SEGMENT_SIZE;
-    t.rx_buffer = NULL;
-
-    err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
-    assert(err == ESP_OK);
-  }
+  err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
+  assert(err == ESP_OK);
 
   esp_camera_fb_return(fb);
 }
