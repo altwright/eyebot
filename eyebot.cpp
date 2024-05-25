@@ -285,35 +285,18 @@ bool CAMGetImage(rgb imgbuf[])
   if (!imgbuf)
     return false;
 
-  uint32_t jpeg_byte_count = 0;
-
-  spi_transaction_t t = {};
-  t.length = sizeof(uint32_t)*8;
-  t.tx_buffer = NULL;
-  t.rx_buffer = &jpeg_byte_count;
-
-  while (digitalRead(PIN_CAM_SIGNAL));
-
-  esp_err_t err = spi_device_transmit(cam_spi_handle, &t);
-  assert(err == ESP_OK);
-
-  if (jpeg_byte_count > MAX_RX_SEGMENT_SIZE)
-    return false;//A misread has happened
-
-  Serial.printf("jpeg bytes: %u\n", jpeg_byte_count);
-
   byte *jpeg_buffer = (byte*)lcd_buf;
 
   memset(jpeg_buffer, 0, MAX_RX_SEGMENT_SIZE);
 
-  t = {};
+  spi_transaction_t t = {};
   t.length = MAX_RX_SEGMENT_SIZE * 8;
   t.tx_buffer = NULL;
   t.rx_buffer = jpeg_buffer;
 
   while (digitalRead(PIN_CAM_SIGNAL));
 
-  err = spi_device_transmit(cam_spi_handle, &t);
+  esp_err_t err = spi_device_transmit(cam_spi_handle, &t);
   assert(err == ESP_OK);
 
   //For some reason the first byte is 7F instead of the FF required

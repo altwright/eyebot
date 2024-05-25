@@ -154,20 +154,11 @@ void loop() {
     dma_bytes[i] = jpeg_bytes[i];
 
   spi_slave_transaction_t t = {};
-  t.length = sizeof(uint32_t) * 8;
-  t.tx_buffer = &jpeg_byte_count;
-  t.rx_buffer = NULL;
-
-  //Transmit size of the JPEG image first
-  esp_err_t err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
-  assert(err == ESP_OK);
-
-  t = {};
   t.length = MAX_TX_SEGMENT_SIZE * 8;
   t.tx_buffer = dma_bytes;
   t.rx_buffer = NULL;
 
-  err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
+  esp_err_t err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
   assert(err == ESP_OK);
 
   esp_camera_fb_return(fb);
