@@ -51,8 +51,6 @@ typedef struct camera_settings {
 // imgbuf must be of length at least QQVGA_SIZE
 bool CAMGetImage(rgb imgbuf[]);                
 
-bool CAMChangeSettings(camera_settings settings);
-
 /////////////////////////////
 //Image Processing Functions
 /////////////////////////////

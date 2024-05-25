@@ -5,6 +5,8 @@
 #include <driver/spi_master.h>
 #include <driver/timer.h>
 #include <TFT_eSPI.h>
+using namespace fs;
+#include <JPEGDEC.h>
 
 #define PIN_BATTERY_POWER 15
 
@@ -31,8 +33,11 @@
 #define CAM_NUM_IMAGE_SEGMENTS 8
 #define QQVGA_RGB565_BUFFER_SIZE QQVGA_SIZE*2
 
+#define MAX_RX_SEGMENT_SIZE 4800
+
 typedef uint32_t u32;
 typedef uint64_t u64;
+typedef uint16_t rgb565;
 
 ////////////////
 //Core Functions
@@ -40,6 +45,10 @@ typedef uint64_t u64;
 
 static TFT_eSPI tft = TFT_eSPI(LCD_WIDTH, LCD_HEIGHT);
 static spi_device_handle_t cam_spi_handle;
+
+static JPEGDEC jpeg = {};
+
+static rgb565 lcd_buf[LCD_HEIGHT*LCD_WIDTH];
 
 enum drive_op
 {
@@ -108,7 +117,7 @@ bool EYEBOTInit()
 
   //Configuration for the SPI bus
   spi_bus_config_t buscfg = {
-    .mosi_io_num = PIN_SPI_MOSI,
+    .mosi_io_num = -1,
     .miso_io_num = PIN_SPI_MISO,
     .sclk_io_num = PIN_SPI_SCLK,
     .quadwp_io_num = -1,
@@ -171,8 +180,6 @@ bool EYEBOTInit()
 //Camera Functions
 ///////////////////
 
-typedef uint16_t rgb565;
-
 static bool IPSwapEndianess(rgb565 *hue)
 {
   uint16_t lower = (*hue & 0xFF00) >> 8;
@@ -194,6 +201,45 @@ static bool IP565To888(rgb565 in_hue, rgb *out_hue)
   *out_hue = tft.color16to24(in_hue);
 
   return true;
+}
+
+static bool SwapEndianess(uint32_t *dword)
+{
+  uint32_t lower_word = *dword >> 16;
+  *dword <<= 16;
+  *dword |= lower_word;
+
+  uint16_t *words = (uint16_t*)dword;
+  for (int i = 0; i < 2; i++)
+  {
+    uint16_t lower_byte = words[i] >> 8;
+    words[i] <<= 8;
+    words[i] |= lower_byte;
+  }
+
+  return true;
+}
+
+static int jpeg_decode_cb(JPEGDRAW *drawInfo)
+{
+  rgb *imgbuf = (rgb*)drawInfo->pUser;
+
+  int ystart = drawInfo->y;
+  int xstart = drawInfo->x;
+  int height = drawInfo->iHeight;
+  int width = drawInfo->iWidth;
+  int clipped_width = drawInfo->iWidthUsed;
+  rgb565 *pixels = drawInfo->pPixels;
+
+  for (int y = 0; y < height; y++)
+  {
+    for (int x = 0; x < width; x++)
+    {
+      IP565To888(pixels[y*clipped_width + x], &imgbuf[(ystart + y)*QQVGA_WIDTH + (xstart + x)]);
+    }
+  }
+
+  return 1;
 }
 
 static bool CAMGetImage(rgb565 imgbuf[])
@@ -239,23 +285,72 @@ bool CAMGetImage(rgb imgbuf[])
   if (!imgbuf)
     return false;
 
-  static rgb565 cambuf[QQVGA_SIZE];
+  uint32_t jpeg_byte_count = 0;
 
-  if (!CAMGetImage(cambuf))
+  spi_transaction_t t = {};
+  t.length = sizeof(uint32_t)*8;
+  t.tx_buffer = NULL;
+  t.rx_buffer = &jpeg_byte_count;
+
+  while (digitalRead(PIN_CAM_SIGNAL));
+
+  esp_err_t err = spi_device_transmit(cam_spi_handle, &t);
+  assert(err == ESP_OK);
+
+  if (jpeg_byte_count > QQVGA_RGB565_BUFFER_SIZE)
+    return false;//A misread has happened
+
+  int rx_segment_count = jpeg_byte_count / MAX_RX_SEGMENT_SIZE;
+  int rx_remainder_byte_count = jpeg_byte_count % MAX_RX_SEGMENT_SIZE;
+
+  byte *jpeg_buffer = (byte*)lcd_buf;
+
+  for (int i = 0; i < rx_segment_count; i++)
   {
-    Serial.printf("Failed to get image from camera\n");
+    t = {};
+    t.length = MAX_RX_SEGMENT_SIZE * 8;
+    t.tx_buffer = NULL;
+    t.rx_buffer = jpeg_buffer + i * MAX_RX_SEGMENT_SIZE;
+
+    while (digitalRead(PIN_CAM_SIGNAL));
+
+    err = spi_device_transmit(cam_spi_handle, &t);
+    assert(err == ESP_OK);
+  }
+
+  if (rx_remainder_byte_count != 0)
+  {
+    //int dword_remainder_bytes = rx_remainder_byte_count % sizeof(uint32_t);
+    //rx_remainder_byte_count += sizeof(uint32_t) - dword_remainder_bytes;
+
+    t = {};
+    t.length = rx_remainder_byte_count * 8;
+    t.tx_buffer = NULL;
+    t.rx_buffer = jpeg_buffer + rx_segment_count * MAX_RX_SEGMENT_SIZE;
+
+    while (digitalRead(PIN_CAM_SIGNAL));
+
+    err = spi_device_transmit(cam_spi_handle, &t);
+    assert(err == ESP_OK);
+  }
+
+  //For some reason the first byte is 7F instead of the FF required
+  jpeg_buffer[0] = 0xFF;
+
+  Serial.printf("%x %x\n", jpeg_buffer[jpeg_byte_count - 2], jpeg_buffer[jpeg_byte_count - 1]);
+
+  if (!jpeg.openRAM(jpeg_buffer, jpeg_byte_count, jpeg_decode_cb))
+  {
+    Serial.printf("Failed to read header info of JPEG\n");
     return false;
   }
 
-  //Copy from rgb565 buffer to rgb888 user buffer
-  for (int row = 0; row < QQVGA_HEIGHT; row++)
-  {
-    for (int col = 0; col < QQVGA_WIDTH; col++)
-    {
-      int i = row*QQVGA_WIDTH + col;
+  jpeg.setUserPointer((void*)imgbuf);
 
-      IP565To888(cambuf[i], &imgbuf[i]);
-    }
+  if (!jpeg.decode(0, 0, 0))
+  {
+    Serial.printf("Failed to decode JPEG\n");
+    return false;
   }
 
   return true;
@@ -659,8 +754,6 @@ const rgb WHITE = 0xFFFFFF;
 const rgb YELLOW = 0xFFFF00;
 const rgb MAGENTA = 0xFF00FF;
 const rgb CYAN = 0x00FFFF;
-
-static rgb565 lcd_buf[LCD_HEIGHT*LCD_WIDTH];
 
 bool LCDDrawImage(int xpos, int ypos, int img_width, int img_height, const rgb img[])
 {
