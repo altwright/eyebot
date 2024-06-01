@@ -31,23 +31,6 @@ typedef struct {
   byte intensity;
 } __attribute__((aligned(4))) hsi;
 
-typedef struct camera_settings {
-  //-2 to 2
-  int8_t brightness;
-  //-2 to 2
-  int8_t contrast;  
-  //-2 to 2     
-  int8_t saturation; 
-  // 0 = disable , 1 = enable
-  uint8_t hmirror;  
-  // 0 = disable , 1 = enable      
-  uint8_t vflip;
-  // 0 = disable , 1 = enable
-  uint8_t colorbar;       
-  // IGNORED
-  uint16_t _padding; 
-} camera_settings;
-
 // imgbuf must be of length at least QQVGA_SIZE
 bool CAMGetImage(rgb imgbuf[]);                
 

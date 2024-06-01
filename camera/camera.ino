@@ -1,6 +1,7 @@
-#include "driver/spi_slave.h"
-#include "esp_camera.h"
-#include "esp_heap_caps.h"
+#include <driver/spi_slave.h>
+#include <esp_camera.h>
+#include <esp_heap_caps.h>
+#include <JPEGENC.h>
 
 // START Pin definition for CAMERA_MODEL_AI_THINKER
 #define PWDN_GPIO_NUM     32
@@ -27,32 +28,15 @@
 #define SPI_CS_PIN 15
 #define CAM_SIGNAL_PIN 2
 
-#define QQVGA_SIZE 160*120
-#define QQVGA_RGB565_BUFFER_SIZE QQVGA_SIZE*2//RGB565
-
-#define CAM_NUM_RGB565_IMAGE_SEGMENTS 8
+#define QQVGA_WIDTH 160
+#define QQVGA_HEIGHT 120
 
 #define MAX_TX_SEGMENT_SIZE 4096
+#define JPEG_MAX_BUFFER_SIZE 32768
 
-typedef struct {
-  //-2 to 2
-  int8_t brightness;
-  //-2 to 2
-  int8_t contrast;  
-  //-2 to 2     
-  int8_t saturation; 
-  // 0 = disable , 1 = enable
-  uint8_t hmirror;  
-  // 0 = disable , 1 = enable      
-  uint8_t vflip;
-  // 0 = disable , 1 = enable
-  uint8_t colorbar; 
-  
-  uint16_t _padding;      
-} camera_settings;
-
-sensor_t *sensor = NULL;
-uint8_t *dma_bytes = NULL;
+JPEGENC jpeg;
+sensor_t *sensor;
+uint8_t *jpeg_bytes;
 
 //Called after a transaction is queued and ready for pickup by master.
 void my_post_setup_cb(spi_slave_transaction_t *trans)
@@ -68,6 +52,7 @@ void my_post_trans_cb(spi_slave_transaction_t *trans)
 
 void setup() {
   Serial.begin(115200);
+
   //Configuration for the SPI bus
   spi_bus_config_t buscfg = {
       .mosi_io_num = -1,
@@ -119,10 +104,10 @@ void setup() {
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
-  config.pixel_format = PIXFORMAT_JPEG; //YUV422,GRAYSCALE,RGB565,JPEG
+  config.pixel_format = PIXFORMAT_RGB565; //YUV422,GRAYSCALE,RGB565,JPEG
   config.frame_size = FRAMESIZE_QQVGA;
   config.fb_count = 1;
-  config.jpeg_quality = 12;
+  config.jpeg_quality = 0;
 
   ret = esp_camera_init(&config);
   if (ret != ESP_OK) {
@@ -138,28 +123,61 @@ void setup() {
   sensor->set_vflip(sensor, 0);          // 0 = disable , 1 = enable
   sensor->set_colorbar(sensor, 0);       // 0 = disable , 1 = enable
 
-  dma_bytes = (uint8_t*)heap_caps_aligned_alloc(sizeof(uint32_t), QQVGA_RGB565_BUFFER_SIZE, MALLOC_CAP_DMA);
-  if(!dma_bytes)
+  jpeg_bytes = (uint8_t*)heap_caps_aligned_alloc(sizeof(uint32_t), JPEG_MAX_BUFFER_SIZE, MALLOC_CAP_DMA);
+  if(!jpeg_bytes)
     Serial.printf("Failed to allocate DMA capable memory\n");
 }
 
 void loop() {
   camera_fb_t *fb = esp_camera_fb_get();
-  uint8_t *jpeg_bytes = fb->buf;
-  uint32_t jpeg_byte_count = fb->len;
+  uint8_t *img_bytes = fb->buf;
+  uint32_t img_byte_count = fb->len;
 
-  Serial.printf("jpeg bytes: %u\n", jpeg_byte_count);
+  int err;
+  if (err = jpeg.open(jpeg_bytes, JPEG_MAX_BUFFER_SIZE))
+  {
+    Serial.printf("Failed to open jpeg buffer: %d\n", err);
+    return;
+  }
 
-  for (int i = 0; i < jpeg_byte_count; i++)
-    dma_bytes[i] = jpeg_bytes[i];
+  JPEGENCODE enc = {};
+  if (err = jpeg.encodeBegin(&enc, QQVGA_WIDTH, QQVGA_HEIGHT, JPEGE_PIXEL_RGB565, JPEGE_SUBSAMPLE_444, JPEGE_Q_LOW))
+  {
+    Serial.printf("Failed to set jpeg encoder parameters: %d\n", err);
+    return;
+  }
+
+  if (err = jpeg.addFrame(&enc, img_bytes, sizeof(uint16_t)*QQVGA_WIDTH))
+  {
+    Serial.printf("Failed to encode jpeg: %d\n", err);
+    return;
+  }
+
+  uint32_t jpeg_bytes_count = jpeg.close();
+  Serial.printf("jpeg bytes count: %d\n", jpeg_bytes_count);
 
   spi_slave_transaction_t t = {};
-  t.length = MAX_TX_SEGMENT_SIZE * 8;
-  t.tx_buffer = dma_bytes;
+  t.length = sizeof(uint32_t) * 8;
+  t.tx_buffer = &jpeg_bytes_count;
   t.rx_buffer = NULL;
 
-  esp_err_t err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
-  assert(err == ESP_OK);
+  esp_err_t rc = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
+  assert(rc == ESP_OK);
+
+  int num_segments = jpeg_bytes_count / MAX_TX_SEGMENT_SIZE;
+  if (jpeg_bytes_count % MAX_TX_SEGMENT_SIZE)
+    num_segments;
+  
+  for (int i = 0; i < num_segments; i++)
+  {
+    t = {};
+    t.length = MAX_TX_SEGMENT_SIZE * 8;
+    t.tx_buffer = jpeg_bytes + i*MAX_TX_SEGMENT_SIZE;
+    t.rx_buffer = NULL;
+
+    esp_err_t err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
+    assert(err == ESP_OK);
+  }
 
   esp_camera_fb_return(fb);
 }

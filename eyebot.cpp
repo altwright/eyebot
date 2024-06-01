@@ -34,6 +34,7 @@ using namespace fs;
 #define QQVGA_RGB565_BUFFER_SIZE QQVGA_SIZE*2
 
 #define MAX_RX_SEGMENT_SIZE 4096
+#define JPEG_MAX_BUFFER_SIZE 32768
 
 typedef uint32_t u32;
 typedef uint64_t u64;
@@ -287,22 +288,44 @@ bool CAMGetImage(rgb imgbuf[])
 
   byte *jpeg_buffer = (byte*)lcd_buf;
 
-  memset(jpeg_buffer, 0, MAX_RX_SEGMENT_SIZE);
+  uint32_t jpeg_bytes_count = 0;
 
   spi_transaction_t t = {};
-  t.length = MAX_RX_SEGMENT_SIZE * 8;
+  t.length = sizeof(uint32_t) * 8;
   t.tx_buffer = NULL;
-  t.rx_buffer = jpeg_buffer;
+  t.rx_buffer = &jpeg_bytes_count;
 
   while (digitalRead(PIN_CAM_SIGNAL));
 
   esp_err_t err = spi_device_transmit(cam_spi_handle, &t);
   assert(err == ESP_OK);
 
+  if (jpeg_bytes_count > JPEG_MAX_BUFFER_SIZE)
+    return false;
+
+  Serial.printf("jpeg byte count: %u\n", jpeg_bytes_count);
+
+  int num_segments = jpeg_bytes_count / MAX_RX_SEGMENT_SIZE;
+  if (jpeg_bytes_count % MAX_RX_SEGMENT_SIZE)
+    num_segments++;
+
+  for (int i = 0; i < num_segments; i++)
+  {
+    t = {};
+    t.length = MAX_RX_SEGMENT_SIZE * 8;
+    t.tx_buffer = NULL;
+    t.rx_buffer = jpeg_buffer + i*MAX_RX_SEGMENT_SIZE;
+
+    while (digitalRead(PIN_CAM_SIGNAL));
+
+    err = spi_device_transmit(cam_spi_handle, &t);
+    assert(err == ESP_OK);
+  }
+
   //For some reason the first byte is 7F instead of the FF required
   jpeg_buffer[0] = 0xFF;
 
-  if (!jpeg.openRAM(jpeg_buffer, MAX_RX_SEGMENT_SIZE, jpeg_decode_cb))
+  if (!jpeg.openRAM(jpeg_buffer, JPEG_MAX_BUFFER_SIZE, jpeg_decode_cb))
   {
     Serial.printf("Failed to read header info of JPEG\n");
     return false;
@@ -316,35 +339,6 @@ bool CAMGetImage(rgb imgbuf[])
     return false;
   }
 
-  return true;
-}
-
-bool CAMChangeSettings(camera_settings settings)
-{
-  uint32_t command = 2;
-  //Send command word 1 to change settings
-  spi_transaction_t t = {};
-  t.length = sizeof(uint32_t)*8;
-  t.tx_buffer = &command;
-  t.rx_buffer = NULL;
-
-  while (digitalRead(PIN_CAM_SIGNAL));
-
-  esp_err_t err = spi_device_transmit(cam_spi_handle, &t);
-  if (err != ESP_OK)
-    return false;
-  
-  t = {};
-  t.length = sizeof(camera_settings)*8;
-  t.tx_buffer = &settings;
-  t.rx_buffer = NULL;
-
-  while (digitalRead(PIN_CAM_SIGNAL));
-
-  err = spi_device_transmit(cam_spi_handle, &t);
-  if (err != ESP_OK)
-    return false;
-  
   return true;
 }
 
