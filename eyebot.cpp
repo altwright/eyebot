@@ -30,15 +30,15 @@ using namespace fs;
 //PSD Pin
 #define PIN_DIST_SENSOR 16
 
-#define CAM_NUM_IMAGE_SEGMENTS 8
-#define QQVGA_RGB565_BUFFER_SIZE QQVGA_SIZE*2
-
-#define MAX_RX_SEGMENT_SIZE 4096
-#define JPEG_MAX_BUFFER_SIZE 32768
-
 typedef uint32_t u32;
 typedef uint64_t u64;
 typedef uint16_t rgb565;
+
+#define CAM_NUM_IMAGE_SEGMENTS 8
+#define QQVGA_RGB565_BUFFER_SIZE QQVGA_WIDTH*QQVGA_HEIGHT*sizeof(rgb565)
+
+#define MAX_RX_SEGMENT_SIZE 4800
+
 
 ////////////////
 //Core Functions
@@ -204,139 +204,32 @@ static bool IP565To888(rgb565 in_hue, rgb *out_hue)
   return true;
 }
 
-static bool SwapEndianess(uint32_t *dword)
+bool CAMGetImage(rgb qqvga_buf[])
 {
-  uint32_t lower_word = *dword >> 16;
-  *dword <<= 16;
-  *dword |= lower_word;
-
-  uint16_t *words = (uint16_t*)dword;
-  for (int i = 0; i < 2; i++)
-  {
-    uint16_t lower_byte = words[i] >> 8;
-    words[i] <<= 8;
-    words[i] |= lower_byte;
-  }
-
-  return true;
-}
-
-static int jpeg_decode_cb(JPEGDRAW *drawInfo)
-{
-  rgb *imgbuf = (rgb*)drawInfo->pUser;
-
-  int ystart = drawInfo->y;
-  int xstart = drawInfo->x;
-  int height = drawInfo->iHeight;
-  int width = drawInfo->iWidth;
-  int clipped_width = drawInfo->iWidthUsed;
-  rgb565 *pixels = drawInfo->pPixels;
-
-  for (int y = 0; y < height; y++)
-  {
-    for (int x = 0; x < width; x++)
-    {
-      IP565To888(pixels[y*clipped_width + x], &imgbuf[(ystart + y)*QQVGA_WIDTH + (xstart + x)]);
-    }
-  }
-
-  return 1;
-}
-
-static bool CAMGetImage(rgb565 imgbuf[])
-{
-  uint32_t command = 1;
-  //Send command byte zero to get image
-  spi_transaction_t t = {};
-  t.length = sizeof(uint32_t)*8;
-  t.tx_buffer = &command;
-  t.rx_buffer = NULL;
-
-  while (digitalRead(PIN_CAM_SIGNAL));
-
-  esp_err_t err = spi_device_transmit(cam_spi_handle, &t);
-  if (err != ESP_OK)
+  if (!qqvga_buf)
     return false;
 
-  byte *buffer = (byte*)imgbuf;
+  byte *rx_buf = (byte*)lcd_buf;
 
-  //Get image segments
   for (int i = 0; i < CAM_NUM_IMAGE_SEGMENTS; i++)
   {
-    t = {};
-    t.length = QQVGA_RGB565_BUFFER_SIZE/CAM_NUM_IMAGE_SEGMENTS*8;//bit length
+    spi_transaction_t t = {};
+    t.length = MAX_RX_SEGMENT_SIZE*8;//bit length
     t.tx_buffer = NULL;
-    t.rx_buffer = buffer + i*(QQVGA_RGB565_BUFFER_SIZE/CAM_NUM_IMAGE_SEGMENTS);
+    t.rx_buffer = rx_buf + i*MAX_RX_SEGMENT_SIZE;
 
     while (digitalRead(PIN_CAM_SIGNAL));
 
-    spi_device_transmit(cam_spi_handle, &t);
-  }
-
-  for (int i = 0; i < QQVGA_SIZE; i++)
-  {
-    IPSwapEndianess(&imgbuf[i]);
-  }
-
-  return true;
-}
-
-bool CAMGetImage(rgb imgbuf[])
-{
-  if (!imgbuf)
-    return false;
-
-  byte *jpeg_buffer = (byte*)lcd_buf;
-
-  uint32_t jpeg_bytes_count = 0;
-
-  spi_transaction_t t = {};
-  t.length = sizeof(uint32_t) * 8;
-  t.tx_buffer = NULL;
-  t.rx_buffer = &jpeg_bytes_count;
-
-  while (digitalRead(PIN_CAM_SIGNAL));
-
-  esp_err_t err = spi_device_transmit(cam_spi_handle, &t);
-  assert(err == ESP_OK);
-
-  if (jpeg_bytes_count > JPEG_MAX_BUFFER_SIZE)
-    return false;
-
-  Serial.printf("jpeg byte count: %u\n", jpeg_bytes_count);
-
-  int num_segments = jpeg_bytes_count / MAX_RX_SEGMENT_SIZE;
-  if (jpeg_bytes_count % MAX_RX_SEGMENT_SIZE)
-    num_segments++;
-
-  for (int i = 0; i < num_segments; i++)
-  {
-    t = {};
-    t.length = MAX_RX_SEGMENT_SIZE * 8;
-    t.tx_buffer = NULL;
-    t.rx_buffer = jpeg_buffer + i*MAX_RX_SEGMENT_SIZE;
-
-    while (digitalRead(PIN_CAM_SIGNAL));
-
-    err = spi_device_transmit(cam_spi_handle, &t);
+    esp_err_t err = spi_device_transmit(cam_spi_handle, &t);
     assert(err == ESP_OK);
   }
 
-  //For some reason the first byte is 7F instead of the FF required
-  jpeg_buffer[0] = 0xFF;
+  rgb565 *cam_buf = (rgb565*)rx_buf;
 
-  if (!jpeg.openRAM(jpeg_buffer, JPEG_MAX_BUFFER_SIZE, jpeg_decode_cb))
+  for (int i = 0; i < QQVGA_WIDTH*QQVGA_HEIGHT; i++)
   {
-    Serial.printf("Failed to read header info of JPEG\n");
-    return false;
-  }
-
-  jpeg.setUserPointer((void*)imgbuf);
-
-  if (!jpeg.decode(0, 0, 0))
-  {
-    Serial.printf("Failed to decode JPEG\n");
-    return false;
+    IPSwapEndianess(&cam_buf[i]);
+    IP565To888(cam_buf[i], &qqvga_buf[i]);
   }
 
   return true;

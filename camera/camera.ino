@@ -1,7 +1,6 @@
 #include <driver/spi_slave.h>
 #include <esp_camera.h>
 #include <esp_heap_caps.h>
-#include <JPEGENC.h>
 
 // START Pin definition for CAMERA_MODEL_AI_THINKER
 #define PWDN_GPIO_NUM     32
@@ -30,13 +29,12 @@
 
 #define QQVGA_WIDTH 160
 #define QQVGA_HEIGHT 120
+#define QQVGA_RGB565_BUFFER_SIZE QQVGA_WIDTH*QQVGA_HEIGHT*sizeof(uint16_t)
 
-#define MAX_TX_SEGMENT_SIZE 4096
-#define JPEG_MAX_BUFFER_SIZE 32768
+#define MAX_TX_SEGMENT_SIZE 4800
+#define NUM_TX_SEGMENTS 8
 
-JPEGENC jpeg;
-sensor_t *sensor;
-uint8_t *jpeg_bytes;
+uint8_t *dma_bytes;
 
 //Called after a transaction is queued and ready for pickup by master.
 void my_post_setup_cb(spi_slave_transaction_t *trans)
@@ -123,56 +121,23 @@ void setup() {
   sensor->set_vflip(sensor, 0);          // 0 = disable , 1 = enable
   sensor->set_colorbar(sensor, 0);       // 0 = disable , 1 = enable
 
-  jpeg_bytes = (uint8_t*)heap_caps_aligned_alloc(sizeof(uint32_t), JPEG_MAX_BUFFER_SIZE, MALLOC_CAP_DMA);
-  if(!jpeg_bytes)
+  dma_bytes = (uint8_t*)heap_caps_aligned_alloc(sizeof(uint32_t), QQVGA_RGB565_BUFFER_SIZE, MALLOC_CAP_DMA);
+  if(!dma_bytes)
     Serial.printf("Failed to allocate DMA capable memory\n");
 }
 
 void loop() {
   camera_fb_t *fb = esp_camera_fb_get();
   uint8_t *img_bytes = fb->buf;
-  uint32_t img_byte_count = fb->len;
 
-  int err;
-  if (err = jpeg.open(jpeg_bytes, JPEG_MAX_BUFFER_SIZE))
-  {
-    Serial.printf("Failed to open jpeg buffer: %d\n", err);
-    return;
-  }
-
-  JPEGENCODE enc = {};
-  if (err = jpeg.encodeBegin(&enc, QQVGA_WIDTH, QQVGA_HEIGHT, JPEGE_PIXEL_RGB565, JPEGE_SUBSAMPLE_444, JPEGE_Q_LOW))
-  {
-    Serial.printf("Failed to set jpeg encoder parameters: %d\n", err);
-    return;
-  }
-
-  if (err = jpeg.addFrame(&enc, img_bytes, sizeof(uint16_t)*QQVGA_WIDTH))
-  {
-    Serial.printf("Failed to encode jpeg: %d\n", err);
-    return;
-  }
-
-  uint32_t jpeg_bytes_count = jpeg.close();
-  Serial.printf("jpeg bytes count: %d\n", jpeg_bytes_count);
-
-  spi_slave_transaction_t t = {};
-  t.length = sizeof(uint32_t) * 8;
-  t.tx_buffer = &jpeg_bytes_count;
-  t.rx_buffer = NULL;
-
-  esp_err_t rc = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
-  assert(rc == ESP_OK);
-
-  int num_segments = jpeg_bytes_count / MAX_TX_SEGMENT_SIZE;
-  if (jpeg_bytes_count % MAX_TX_SEGMENT_SIZE)
-    num_segments;
+  for (int i = 0; i < QQVGA_RGB565_BUFFER_SIZE; i++)
+    dma_bytes[i] = img_bytes[i];
   
-  for (int i = 0; i < num_segments; i++)
+  for (int i = 0; i < NUM_TX_SEGMENTS; i++)
   {
-    t = {};
+    spi_slave_transaction_t t = {};
     t.length = MAX_TX_SEGMENT_SIZE * 8;
-    t.tx_buffer = jpeg_bytes + i*MAX_TX_SEGMENT_SIZE;
+    t.tx_buffer = dma_bytes + i*MAX_TX_SEGMENT_SIZE;
     t.rx_buffer = NULL;
 
     esp_err_t err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);

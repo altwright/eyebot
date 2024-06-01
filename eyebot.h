@@ -19,7 +19,6 @@ bool EYEBOTInit();
 
 #define QQVGA_WIDTH 160
 #define QQVGA_HEIGHT 120
-#define QQVGA_SIZE QQVGA_WIDTH*QQVGA_HEIGHT
 
 typedef uint8_t byte; 
 typedef byte grayscale;
@@ -31,8 +30,8 @@ typedef struct {
   byte intensity;
 } __attribute__((aligned(4))) hsi;
 
-// imgbuf must be of length at least QQVGA_SIZE
-bool CAMGetImage(rgb imgbuf[]);                
+// img_buf must be of length at least QQVGA_WIDTH*QQVGA_HEIGHT in size
+bool CAMGetImage(rgb qqvga_buf[]);                
 
 /////////////////////////////
 //Image Processing Functions
