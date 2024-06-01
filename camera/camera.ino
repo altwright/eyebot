@@ -21,11 +21,10 @@
 #define PCLK_GPIO_NUM     22
 // END Pin definition for CAMERA_MODEL_AI_THINKER
 
-#define SPI_MOSI_PIN 12
-#define SPI_MISO_PIN 13
-#define SPI_SCLK_PIN 14
-#define SPI_CS_PIN 15
-#define CAM_SIGNAL_PIN 2
+#define SPI_MISO_PIN 12
+#define SPI_CS_PIN 13
+#define SPI_SCLK_PIN 15
+#define CAM_SIGNAL_PIN 14
 
 #define QQVGA_WIDTH 160
 #define QQVGA_HEIGHT 120

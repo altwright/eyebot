@@ -11,11 +11,10 @@ using namespace fs;
 #define PIN_BATTERY_POWER 15
 
 //Camera Pins
-#define PIN_SPI_MOSI 43
-#define PIN_SPI_MISO 44
-#define PIN_SPI_CS 18
-#define PIN_SPI_SCLK 17
-#define PIN_CAM_SIGNAL 21
+#define PIN_SPI_MISO 43
+#define PIN_SPI_CS 44
+#define PIN_SPI_SCLK 1
+#define PIN_CAM_SIGNAL 2
 
 //Button Pins
 #define PIN_LEFT_BUTTON 0
