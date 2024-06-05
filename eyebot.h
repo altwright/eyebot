@@ -137,7 +137,7 @@ enum button {
   RIGHT_BUTTON
 };
 
-typedef void (*button_callback) ();
+typedef void (*input_callback) ();
 
 //Non-blocking
 bool INReadButton(button b, bool *pressed);
@@ -164,9 +164,15 @@ bool INWaitForButtonRelease(button b);
  * To make sure variables shared between an ISR and the main program are updated correctly, 
  * declare them as volatile."
 */
-bool INSetButtonCallback(button b, button_callback cb);
+bool INSetButtonCallback(button b, input_callback cb);
 
 bool INClearButtonCallback(button b);
+
+bool INReadTouch(int *x, int *y);
+
+bool INSetTouchCallback(input_callback cb);
+
+bool INClearTouchCallback();
 
 //////////////////////////
 //Motor-Driving Functions

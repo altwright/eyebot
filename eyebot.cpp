@@ -1,14 +1,12 @@
+#define TOUCH_MODULES_CST_SELF
 #include "eyebot.h"
-
 #include <Arduino.h>
 #include <math.h>
 #include <driver/spi_master.h>
 #include <driver/timer.h>
 #include <TFT_eSPI.h>
-using namespace fs;
-#include <JPEGDEC.h>
-
-#define PIN_BATTERY_POWER 15
+#include <TouchLib.h>
+#include <Wire.h>
 
 //Camera Pins
 #define PIN_SPI_MISO 43
@@ -21,13 +19,19 @@ using namespace fs;
 #define PIN_RIGHT_BUTTON 14
 
 //Motor Pins
-#define PIN_LEFT_MOTOR_FORWARD 1
-#define PIN_LEFT_MOTOR_BACKWARD 2
-#define PIN_RIGHT_MOTOR_FORWARD 10
-#define PIN_RIGHT_MOTOR_BACKWARD 3
+#define PIN_LEFT_MOTOR_FORWARD 3
+#define PIN_LEFT_MOTOR_BACKWARD 10
+#define PIN_RIGHT_MOTOR_FORWARD 12
+#define PIN_RIGHT_MOTOR_BACKWARD 11
 
 //PSD Pin
-#define PIN_DIST_SENSOR 16
+#define PIN_DIST_SENSOR 13
+
+//Touch Pins
+#define PIN_IIC_SCL                  17
+#define PIN_IIC_SDA                  18
+#define PIN_TOUCH_INT                16
+#define PIN_TOUCH_RES                21
 
 typedef uint32_t u32;
 typedef uint64_t u64;
@@ -38,15 +42,13 @@ typedef uint16_t rgb565;
 
 #define MAX_RX_SEGMENT_SIZE 4800
 
-
 ////////////////
 //Core Functions
 ////////////////
 
 static TFT_eSPI tft = TFT_eSPI(LCD_WIDTH, LCD_HEIGHT);
 static spi_device_handle_t cam_spi_handle;
-
-static JPEGDEC jpeg = {};
+TouchLib touch(Wire, PIN_IIC_SDA, PIN_IIC_SCL, CTS820_SLAVE_ADDRESS, PIN_TOUCH_RES);
 
 static rgb565 lcd_buf[LCD_HEIGHT*LCD_WIDTH];
 
@@ -72,19 +74,26 @@ static bool motor_timer_kill_cb(void *arg)
   return true;
 }
 
-static button_callback left_button_cb = NULL;
-static button_callback right_button_cb = NULL;
+static input_callback left_button_cb = NULL;
+static input_callback right_button_cb = NULL;
+static input_callback touch_cb = NULL;
 
 static void default_left_button_cb()
 {
   if (left_button_cb)
-      left_button_cb();
+    left_button_cb();
 }
 
 static void default_right_button_cb()
 {
   if (right_button_cb)
-      right_button_cb();
+    right_button_cb();
+}
+
+static void default_touch_cb()
+{
+  if (touch_cb)
+    touch_cb();
 }
 
 bool EYEBOTInit()
@@ -172,6 +181,23 @@ bool EYEBOTInit()
 
   err = timer_isr_callback_add(timer_group, motor_timer_idx, motor_timer_kill_cb, NULL, 0);
   assert(err == ESP_OK);
+
+  //////////////////////////
+  //Initialise touch screen
+  //////////////////////////
+
+  gpio_hold_dis((gpio_num_t)PIN_TOUCH_RES);
+  pinMode(PIN_TOUCH_RES, OUTPUT);
+  digitalWrite(PIN_TOUCH_RES, LOW);
+  delay(500);
+  digitalWrite(PIN_TOUCH_RES, HIGH);
+  Wire.begin(PIN_IIC_SDA, PIN_IIC_SCL);
+
+  if (!touch.init()) {
+    Serial.println("Touch IC not found");
+  }
+
+  attachInterrupt(digitalPinToInterrupt(PIN_TOUCH_INT), default_touch_cb, FALLING);
 
   return true;
 }
@@ -886,7 +912,7 @@ bool INWaitForButtonRelease(button b)
   return true;
 }
 
-bool INSetButtonCallback(button b, button_callback cb)
+bool INSetButtonCallback(button b, input_callback cb)
 {
   if (!cb)
     return false;
@@ -919,6 +945,41 @@ bool INClearButtonCallback(button b)
     default: 
       break;
   }
+
+  return true;
+}
+
+
+bool INReadTouch(int *x, int *y)
+{
+  if (touch.read())
+  {
+    TP_Point t = touch.getPoint(0);
+    *x = t.x < LCD_WIDTH ? t.x : -1;
+    *y = t.y < LCD_HEIGHT ? t.y : -1;
+  }
+  else
+  {
+    *x = -1;
+    *y = -1;
+  }
+
+  return true;
+}
+
+bool INSetTouchCallback(input_callback cb)
+{
+  if (!cb)
+    return false;
+  
+  touch_cb = cb;
+
+  return true;
+}
+
+bool INClearTouchCallback()
+{
+  touch_cb = NULL;
 
   return true;
 }
