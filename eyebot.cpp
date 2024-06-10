@@ -67,7 +67,14 @@ static timer_idx_t motor_timer_idx = TIMER_0;
 
 static bool motor_timer_kill_cb(void *arg)
 {
-  DRVSetSpeed(0, 0);
+  //DRVSetSpeed(0, 0);
+
+  //Added this back in because ISR seg faults were occuring in this
+  //function
+  analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
+  analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
+  analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
+  analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
 
   current_drv_op = DRV_OP_NONE;
 
@@ -886,6 +893,9 @@ bool INReadButton(button b, bool *pressed)
 
   int pin = INGetButtonPin(b);
 
+  if (pin < 0)
+    return false;
+
   if (digitalRead(pin))
     *pressed = false;
   else
@@ -1095,9 +1105,9 @@ bool DRVGetPosition(int *x, int *y, int *angle)
 bool DRVSetSpeed(int lin_speed, int ang_speed)
 {
   // Set current eyebot position
-  int x, y, angle;
-  DRVGetPosition(&x, &y, &angle);
-  DRVSetPosition(x, y, angle);
+  // int x, y, angle;
+  // DRVGetPosition(&x, &y, &angle);
+  // DRVSetPosition(x, y, angle);
 
   if (lin_speed < -1 * max_linear_speed)
     lin_speed = -1 * max_linear_speed;
@@ -1206,20 +1216,35 @@ static bool SetMotorKillTimer(u64 time_ms)
 {
   esp_err_t err;
   if (err = timer_pause(timer_group, motor_timer_idx))
+  {
+    Serial.printf("Failed to pause timer: %d\n", err);
     return false;
+  }
 
   //Assumes 2000 increments per s
   if (err = timer_set_counter_value(timer_group, motor_timer_idx, 0))
+  {
+    Serial.printf("Failed to set timer counter to zero: %d\n", err);
     return false;
+  }
 
   if (err = timer_set_alarm_value(timer_group, motor_timer_idx, 2*(u64)time_ms))
+  {
+    Serial.printf("Failed to set timer alarm value: %d\n", err);
     return false;
+  }
 
   if (err = timer_set_alarm(timer_group, motor_timer_idx, TIMER_ALARM_EN))
+  {
+    Serial.printf("Failed to enable timer alarm: %d\n", err);
     return false;
+  }
 
   if (err = timer_start(timer_group, motor_timer_idx))
+  {
+    Serial.printf("Failed to start timer: %d\n", err);
     return false;
+  }
 
   return true;
 }
@@ -1246,7 +1271,10 @@ bool DRVStraight(int dist, int speed)
   float time_taken = (dist / (float)speed) * 1000;
 
   if (!SetMotorKillTimer((u64)time_taken))
+  {
+    Serial.printf("Failed to start kill motor timer\n");
     return false;
+  }
   
   eyebot_op_total_time = time_taken;
 

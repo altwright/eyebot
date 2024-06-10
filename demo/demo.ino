@@ -6,6 +6,15 @@ static rgb img[QQVGA_WIDTH*QQVGA_HEIGHT];
 static grayscale gray_img[QQVGA_WIDTH*QQVGA_HEIGHT];
 static grayscale edge_img[QQVGA_WIDTH*QQVGA_HEIGHT];
 
+static int max_lin_speed = 340;
+static int lin_speed = 340;
+static int distance = 1000;
+static int ang_speed = 180;
+static int max_ang_speed = 180;
+static int angle = 0;
+static int left_motor_offset = 0;
+static int right_motor_offset = 0;
+
 enum DemoPhase {
   HOME_SCREEN,
   COLOUR_NAVIGATION,
@@ -30,9 +39,10 @@ enum CamImageProcessing {
   SOBEL_PROC
 };
 
-enum DriveStraightScreen {
-  DRV_STRAIGHT_SETTINGS,
-  DRV_STRAIGHT_START
+enum DriveScreen {
+  DRV_SCREEN_SETTINGS_1,
+  DRV_SCREEN_SETTINGS_2,
+  DRV_SCREEN_START
 };
 
 void setup() {
@@ -42,8 +52,8 @@ void setup() {
     Serial.printf("Initialisation of Eyebot failed\n");
   
   DRVSetMotorOffsets(0, 0);
-  DRVSetMaxLinearSpeed(340);
-  DRVSetMaxAngularSpeed(180);
+  DRVSetMaxLinearSpeed(max_lin_speed);
+  DRVSetMaxAngularSpeed(max_ang_speed);
 
   demoPhase = HOME_SCREEN;
 }
@@ -107,6 +117,9 @@ void loop() {
           //Demo Option 2 Text
           LCDPrintAt(15, 168, "DRV STRAIGHT");
 
+          //Demo Optin 3 Text
+          LCDPrintAt(33, 259, "DRV CURVE");
+
           //Page number
           LCDSetFontSize(1);
           LCDSetFontColor(WHITE);
@@ -129,10 +142,19 @@ void loop() {
               demoPhase = DRIVE_STRAIGHT;
               ui_init = false;
             }
+            else if (touch_y >= 230 && touch_y <= 230 + DEMO_OPTION_HEIGHT)
+            {
+              demoPhase = DRIVE_CURVE;
+              ui_init = false;
+            }
 
             delay(200);
           }
+
+          break;
         }
+        default:
+          homePage = HOME_PAGE_1;
       }
 
       break;
@@ -267,14 +289,11 @@ void loop() {
     }
     case DRIVE_STRAIGHT:
     {
-      static DriveStraightScreen screen = DRV_STRAIGHT_SETTINGS;
-      static int max_lin_speed = 340;
-      static int speed = 340;
-      static int distance = 1000;
+      static DriveScreen screen = DRV_SCREEN_SETTINGS_1;
 
       switch (screen)
       {
-        case DRV_STRAIGHT_SETTINGS:
+        case DRV_SCREEN_SETTINGS_1:
         {
           if (!ui_init)
           {
@@ -289,6 +308,16 @@ void loop() {
             //Exit Symbol label
             LCDSetFontColor(WHITE);
             LCDPrintAt(34, LCD_HEIGHT - 23, "Exit");
+
+            //Extra Settings Page symbol
+            LCDDrawCircle(75, LCD_HEIGHT - 20, 10, WHITE);
+            LCDSetFontSize(1);
+            LCDSetFontColor(BLACK, WHITE);
+            LCDPrintAt(73, LCD_HEIGHT - 23, "R");
+
+            //Exit Symbol label
+            LCDSetFontColor(WHITE);
+            LCDPrintAt(89, LCD_HEIGHT - 23, "Extras");
 
             //Distance label
             LCDSetFontSize(1);
@@ -352,13 +381,24 @@ void loop() {
             break;
           }
 
+          bool right_pressed;
+          INReadButton(RIGHT_BUTTON, &right_pressed);
+
+          if (right_pressed)
+          {
+            screen = DRV_SCREEN_SETTINGS_2;
+            ui_init = false;
+            delay(200);
+            break;
+          }
+
           char val_str[8];
           snprintf(val_str, 8, "%d ", distance);
           LCDSetFontSize(2);
           LCDSetFontColor(WHITE);
           LCDPrintAt(50, 34, val_str);
 
-          snprintf(val_str, 8, "%d ", speed);
+          snprintf(val_str, 8, "%d ", lin_speed);
           LCDPrintAt(62, 96, val_str);
 
           snprintf(val_str, 8, "%d ", max_lin_speed);
@@ -373,10 +413,16 @@ void loop() {
               distance -= 100;
             
             if (touch_y >= 82 && touch_y <= 122)
-              speed -= 10;
+              lin_speed -= 10;
             
             if (touch_y >= 144 && touch_y <= 184)
               max_lin_speed -= 10;
+            
+            if (lin_speed < 0)
+              lin_speed = 0;
+            
+            if (max_lin_speed < 0)
+              max_lin_speed = 0;
 
             delay(200);
           }
@@ -387,7 +433,7 @@ void loop() {
               distance += 100;
             
             if (touch_y >= 82 && touch_y <= 122)
-              speed += 10;
+              lin_speed += 10;
             
             if (touch_y >= 144 && touch_y <= 184)
               max_lin_speed += 10;
@@ -403,26 +449,134 @@ void loop() {
 
           if (touch_x >= 5 && touch_x <= 165 && touch_y >= 240 && touch_y <= 280)
           {
-            screen = DRV_STRAIGHT_START;
+            screen = DRV_SCREEN_START;
             ui_init = false;
             delay(200);
           }
 
           break;
         }
-        case DRV_STRAIGHT_START:
+        case DRV_SCREEN_SETTINGS_2:
+        {
+          if (!ui_init)
+          {
+            LCDClear();
+
+            //Go Back Symbol
+            LCDDrawCircle(20, LCD_HEIGHT - 20, 10, WHITE);
+            LCDSetFontSize(1);
+            LCDSetFontColor(BLACK, WHITE);
+            LCDPrintAt(19, LCD_HEIGHT - 23, "L");
+
+            //Go Back Symbol label
+            LCDSetFontColor(WHITE);
+            LCDPrintAt(34, LCD_HEIGHT - 23, "Go back");
+
+            //Left Motor Offset label
+            LCDSetFontSize(1);
+            LCDSetFontColor(WHITE);
+            LCDPrintAt(5, 5, "Left Motor Offset");
+
+            //Left Motor Offset decrease
+            LCDDrawRect(5, 20, 40, 40, WHITE);
+            LCDDrawRect(15, 38, 20, 5, BLACK);
+
+            //Left Motor Offset increase
+            LCDDrawRect(125, 20, 40, 40, WHITE);
+            LCDDrawRect(135, 38, 20, 5, BLACK);
+            LCDDrawRect(143, 30, 5, 21, BLACK);
+
+            //Right Motor Offset label
+            LCDPrintAt(5, 68, "Right Motor Offset");
+            
+            //Right Motor Offset decrease
+            LCDDrawRect(5, 82, 40, 40, WHITE);
+            LCDDrawRect(15, 100, 20, 5, BLACK);
+
+            //Right Motor Offset increase
+            LCDDrawRect(125, 82, 40, 40, WHITE);
+            LCDDrawRect(135, 100, 20, 5, BLACK);
+            LCDDrawRect(143, 92, 5, 21, BLACK);
+
+            ui_init = true;
+          }
+
+          bool left_pressed;
+          INReadButton(LEFT_BUTTON, &left_pressed);
+
+          if (left_pressed)
+          {
+            ui_init = false;
+            screen = DRV_SCREEN_SETTINGS_1;
+            delay(200);
+            break;
+          }
+
+          char val_str[8];
+          LCDSetFontSize(2);
+          LCDSetFontColor(WHITE);
+
+          //Left Motor Offset value
+          snprintf(val_str, 8, "%d ", left_motor_offset);
+          LCDPrintAt(50, 34, val_str);
+
+          //Right Motor Offset value
+          snprintf(val_str, 8, "%d ", right_motor_offset);
+          LCDPrintAt(50, 96, val_str);
+
+          int touch_x, touch_y;
+          INReadTouch(&touch_x, &touch_y);
+
+          if (touch_x >= 5 && touch_x <= 45)
+          {
+            if (touch_y >= 20 && touch_y <= 60)
+              left_motor_offset -= 1;
+            
+            if (touch_y >= 82 && touch_y <= 122)
+              right_motor_offset -= 1;
+            
+            if (left_motor_offset < -255)
+              left_motor_offset = 255;
+
+            if (right_motor_offset < -255)
+              right_motor_offset = -255;
+
+            delay(200);
+          }
+
+          if (touch_x >= 125 && touch_x <= 165)
+          {
+            if (touch_y >= 20 && touch_y <= 60)
+              left_motor_offset += 1;
+            
+            if (touch_y >= 82 && touch_y <= 122)
+              right_motor_offset += 1;
+
+            if (left_motor_offset > 255)
+              left_motor_offset = 255;
+
+            if (right_motor_offset > 255)
+              right_motor_offset = 255;
+
+            delay(200);
+          }
+
+          break;
+        }
+        case DRV_SCREEN_START:
         {
           if (!ui_init)
           {
             LCDDrawRect(0, 0, LCD_WIDTH, LCD_HEIGHT, BLACK);
-            LCDDrawRect(5, 5, 160, 315, RED);
+            LCDDrawRect(5, 5, 160, 310, RED);
 
             LCDSetFontSize(4);
             LCDSetFontColor(WHITE, RED);
-            LCDPrintAt(37, 120, "HALT");
+            LCDPrintAt(29, 135, "RESET");
 
+            DRVSetMotorOffsets(left_motor_offset, right_motor_offset);
             DRVSetMaxLinearSpeed(max_lin_speed);
-            DRVStraight(distance, speed);
+            DRVStraight(distance, lin_speed);
 
             ui_init = true;
           }
@@ -432,13 +586,381 @@ void loop() {
 
           if (touch_x >= 0 && touch_y >= 0)
           {
-            screen = DRV_STRAIGHT_SETTINGS;
+            screen = DRV_SCREEN_SETTINGS_1;
             ui_init = false;
             DRVSetSpeed(0, 0);
             delay(200);
           }
+
+          break;
         }
         default:
+          break;
+      }
+
+      break;
+    }
+    case DRIVE_CURVE:
+    {
+      static DriveScreen screen = DRV_SCREEN_SETTINGS_1;
+
+      switch (screen)
+      {
+        case DRV_SCREEN_SETTINGS_1:
+        {
+          if (!ui_init)
+          {
+            LCDDrawRect(0, 0, LCD_WIDTH, LCD_HEIGHT, BLACK);
+
+            //Exit Symbol
+            LCDDrawCircle(20, LCD_HEIGHT - 20, 10, WHITE);
+            LCDSetFontSize(1);
+            LCDSetFontColor(BLACK, WHITE);
+            LCDPrintAt(19, LCD_HEIGHT - 23, "L");
+
+            //Exit Symbol label
+            LCDSetFontColor(WHITE);
+            LCDPrintAt(34, LCD_HEIGHT - 23, "Exit");
+
+            //Extra Settings Page symbol
+            LCDDrawCircle(75, LCD_HEIGHT - 20, 10, WHITE);
+            LCDSetFontSize(1);
+            LCDSetFontColor(BLACK, WHITE);
+            LCDPrintAt(73, LCD_HEIGHT - 23, "R");
+
+            //Exit Symbol label
+            LCDSetFontColor(WHITE);
+            LCDPrintAt(89, LCD_HEIGHT - 23, "Extras");
+
+            //Distance label
+            LCDSetFontSize(1);
+            LCDSetFontColor(WHITE);
+            LCDPrintAt(5, 5, "Distance (mm)");
+
+            //Distance decrease
+            LCDDrawRect(5, 20, 40, 40, WHITE);
+            LCDDrawRect(15, 38, 20, 5, BLACK);
+
+            //Distance increase
+            LCDDrawRect(125, 20, 40, 40, WHITE);
+            LCDDrawRect(135, 38, 20, 5, BLACK);
+            LCDDrawRect(143, 30, 5, 21, BLACK);
+
+            //Speed label
+            LCDPrintAt(5, 68, "Speed (mm/s)");
+            
+            //Speed decrease
+            LCDDrawRect(5, 82, 40, 40, WHITE);
+            LCDDrawRect(15, 100, 20, 5, BLACK);
+
+            //Speed increase
+            LCDDrawRect(125, 82, 40, 40, WHITE);
+            LCDDrawRect(135, 100, 20, 5, BLACK);
+            LCDDrawRect(143, 92, 5, 21, BLACK);
+
+            //Angle label
+            LCDPrintAt(5, 130, "Final Angle (degrees)");
+
+            //Angle decrease
+            LCDDrawRect(5, 144, 40, 40, WHITE);
+            LCDDrawRect(15, 162, 20, 5, BLACK);
+
+            //Angle increase
+            LCDDrawRect(125, 144, 40, 40, WHITE);
+            LCDDrawRect(135, 162, 20, 5, BLACK);
+            LCDDrawRect(143, 154, 5, 21, BLACK);
+
+            //Reverse direction option
+            LCDDrawRect(5, 193, 160, 40, WHITE);
+            LCDSetFontSize(2);
+            LCDSetFontColor(BLACK, WHITE);
+            LCDPrintAt(44, 205, "REVERSE");
+
+            //Start button
+            LCDDrawRect(5, 240, 160, 40, WHITE);
+            LCDPrintAt(54, 252, "START");
+
+            ui_init = true;
+          }
+
+          char val_str[8];
+          LCDSetFontSize(2);
+          LCDSetFontColor(WHITE);
+
+          //Distance value
+          snprintf(val_str, 8, "%d ", distance);
+          LCDPrintAt(50, 34, val_str);
+
+          //Speed value
+          snprintf(val_str, 8, "%d ", lin_speed);
+          LCDPrintAt(50, 96, val_str);
+
+          //Angle value
+          snprintf(val_str, 8, "%d  ", angle);
+          LCDPrintAt(50, 158, val_str);
+
+          bool left_pressed;
+          INReadButton(LEFT_BUTTON, &left_pressed);
+
+          if (left_pressed)
+          {
+            demoPhase = HOME_SCREEN;
+            ui_init = false;
+            delay(200);
+            break;
+          }
+
+          bool right_pressed;
+          INReadButton(RIGHT_BUTTON, &right_pressed);
+
+          if (right_pressed)
+          {
+            screen = DRV_SCREEN_SETTINGS_2;
+            ui_init = false;
+            delay(200);
+            break;
+          }
+
+          int touch_x, touch_y;
+          INReadTouch(&touch_x, &touch_y);
+
+          if (touch_x >= 5 && touch_x <= 45)
+          {
+            if (touch_y >= 20 && touch_y <= 60)
+              distance -= 100;
+            
+            if (touch_y >= 82 && touch_y <= 122)
+              lin_speed -= 10;
+            
+            if (touch_y >= 144 && touch_y <= 184)
+              angle -= 10;
+            
+            if (lin_speed < 0)
+              lin_speed = 0;
+
+            delay(200);
+          }
+
+          if (touch_x >= 125 && touch_x <= 165)
+          {
+            if (touch_y >= 20 && touch_y <= 60)
+              distance += 100;
+            
+            if (touch_y >= 82 && touch_y <= 122)
+              lin_speed += 10;
+            
+            if (touch_y >= 144 && touch_y <= 184)
+              angle += 10;
+
+            delay(200);
+          }
+
+          if (touch_x >= 5 && touch_x <= 165 && touch_y >= 193 && touch_y <= 233)
+          {
+            distance *= -1;
+            delay(200);
+          }
+
+          if (touch_x >= 5 && touch_x <= 165 && touch_y >= 240 && touch_y <= 280)
+          {
+            screen = DRV_SCREEN_START;
+            ui_init = false;
+            delay(200);
+          }
+
+          break;
+        }
+        case DRV_SCREEN_SETTINGS_2:
+        {
+          if (!ui_init)
+          {
+            LCDClear();
+
+            //Exit Symbol
+            LCDDrawCircle(20, LCD_HEIGHT - 20, 10, WHITE);
+            LCDSetFontSize(1);
+            LCDSetFontColor(BLACK, WHITE);
+            LCDPrintAt(19, LCD_HEIGHT - 23, "L");
+
+            //Go Back Symbol label
+            LCDSetFontColor(WHITE);
+            LCDPrintAt(34, LCD_HEIGHT - 23, "Go back");
+
+            //Left Motor Offset label
+            LCDSetFontSize(1);
+            LCDSetFontColor(WHITE);
+            LCDPrintAt(5, 5, "Left Motor Offset");
+
+            //Left Motor Offset decrease
+            LCDDrawRect(5, 20, 40, 40, WHITE);
+            LCDDrawRect(15, 38, 20, 5, BLACK);
+
+            //Left Motor Offset increase
+            LCDDrawRect(125, 20, 40, 40, WHITE);
+            LCDDrawRect(135, 38, 20, 5, BLACK);
+            LCDDrawRect(143, 30, 5, 21, BLACK);
+
+            //Right Motor Offset label
+            LCDPrintAt(5, 68, "Right Motor Offset");
+            
+            //Right Motor Offset decrease
+            LCDDrawRect(5, 82, 40, 40, WHITE);
+            LCDDrawRect(15, 100, 20, 5, BLACK);
+
+            //Right Motor Offset increase
+            LCDDrawRect(125, 82, 40, 40, WHITE);
+            LCDDrawRect(135, 100, 20, 5, BLACK);
+            LCDDrawRect(143, 92, 5, 21, BLACK);
+
+            //Max Linear Speed label
+            LCDPrintAt(5, 130, "Max Linear Speed (mm/s)");
+
+            //Max Linear Speed decrease
+            LCDDrawRect(5, 144, 40, 40, WHITE);
+            LCDDrawRect(15, 162, 20, 5, BLACK);
+
+            //Max Linear Speed increase
+            LCDDrawRect(125, 144, 40, 40, WHITE);
+            LCDDrawRect(135, 162, 20, 5, BLACK);
+            LCDDrawRect(143, 154, 5, 21, BLACK);
+
+            //Max Angular Speed label
+            LCDPrintAt(5, 192, "Max Angular Speed (deg./s)");
+
+            //Max Angular Speed decrease
+            LCDDrawRect(5, 206, 40, 40, WHITE);
+            LCDDrawRect(15, 224, 20, 5, BLACK);
+
+            //Max Angular Speed increase
+            LCDDrawRect(125, 206, 40, 40, WHITE);
+            LCDDrawRect(135, 224, 20, 5, BLACK);
+            LCDDrawRect(143, 216, 5, 21, BLACK);
+
+            ui_init = true;
+          }
+
+          bool left_pressed;
+          INReadButton(LEFT_BUTTON, &left_pressed);
+
+          if (left_pressed)
+          {
+            screen = DRV_SCREEN_SETTINGS_1;
+            ui_init = false;
+            delay(200);
+            break;
+          }
+
+          char val_str[8];
+          LCDSetFontSize(2);
+          LCDSetFontColor(WHITE);
+
+          //Left Motor Offset value
+          snprintf(val_str, 8, "%d ", left_motor_offset);
+          LCDPrintAt(50, 34, val_str);
+
+          //Right Motor Offset value
+          snprintf(val_str, 8, "%d ", right_motor_offset);
+          LCDPrintAt(50, 96, val_str);
+
+          //Max Linear Speed value
+          snprintf(val_str, 8, "%d ", max_lin_speed);
+          LCDPrintAt(50, 158, val_str);
+
+          //Max Linear Speed value
+          snprintf(val_str, 8, "%d ", max_ang_speed);
+          LCDPrintAt(50, 220, val_str);
+
+          int touch_x, touch_y;
+          INReadTouch(&touch_x, &touch_y);
+
+          if (touch_x >= 5 && touch_x <= 45)
+          {
+            if (touch_y >= 20 && touch_y <= 60)
+              left_motor_offset -= 1;
+            
+            if (touch_y >= 82 && touch_y <= 122)
+              right_motor_offset -= 1;
+            
+            if (touch_y >= 144 && touch_y <= 184)
+              max_lin_speed -= 10;
+            
+            if (touch_y >= 206 && touch_y <= 246)
+              max_ang_speed -= 10;
+            
+            if (left_motor_offset < -255)
+              left_motor_offset = -255;
+            
+            if (right_motor_offset < -255)
+              right_motor_offset = -255;
+            
+            if (max_lin_speed < 0)
+              max_lin_speed = 0;
+            
+            if (max_ang_speed < 0)
+              max_ang_speed = 0;
+
+            delay(200);
+          }
+          else if (touch_x >= 125 && touch_x <= 165)
+          {
+            if (touch_y >= 20 && touch_y <= 60)
+              left_motor_offset += 1;
+            
+            if (touch_y >= 82 && touch_y <= 122)
+              right_motor_offset += 1;
+            
+            if (touch_y >= 144 && touch_y <= 184)
+              max_lin_speed += 10;
+            
+            if (touch_y >= 206 && touch_y <= 246)
+              max_ang_speed += 10;
+
+            if (left_motor_offset > 255)
+              left_motor_offset = 255;
+            
+            if (right_motor_offset > 255)
+              right_motor_offset = 255;
+
+            delay(200);
+          }
+
+          break;
+        }
+        case DRV_SCREEN_START:
+        {
+          if (!ui_init)
+          {
+            LCDClear();
+            LCDDrawRect(5, 5, 160, 310, RED);
+            
+            LCDSetFontSize(4);
+            LCDSetFontColor(WHITE, RED);
+            LCDPrintAt(29, 135, "RESET");
+
+            DRVSetMotorOffsets(left_motor_offset, right_motor_offset);
+            DRVSetMaxLinearSpeed(max_lin_speed);
+            DRVSetMaxAngularSpeed(max_ang_speed);
+
+            DRVCurve(distance, angle, lin_speed);
+
+            ui_init = true;
+          }
+
+          int touch_x, touch_y;
+          INReadTouch(&touch_x, &touch_y);
+
+          if (touch_x >= 0 && touch_y >= 0)
+          {
+            screen = DRV_SCREEN_SETTINGS_1;
+            ui_init = false;
+            DRVSetSpeed(0, 0);
+            delay(200);
+          }
+          
+          break;
+        }
+        default:
+          screen = DRV_SCREEN_SETTINGS_1;
           break;
       }
 
