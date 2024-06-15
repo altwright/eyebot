@@ -1188,7 +1188,7 @@ bool DRVSetSpeed(int lin_speed, int ang_speed)
   {
     // When turning on spot, angular speed is inherently doubled, since
     // it only assumes that it is pivoting around a stationary wheel.
-    ang_speed_percentage /= 2;
+    //ang_speed_percentage /= 2;
 
     if (clockwise)
     {
@@ -1457,72 +1457,60 @@ bool DRVWait()
 // Position Sensitive Device (PSD) Functions
 /////////////////////////////////////////////
 
+struct RawDistancePair
+{
+  int raw;
+  int distance;//mm
+};
+
+#define RAW_DISTANCE_PAIR_COUNT 25
+
 // Read distance value in mm from distance sensor
 bool PSDGet(int *dist)
 {
   if (!dist)
     return false;
   
-  //Max val is 4095
+  static RawDistancePair pairs[RAW_DISTANCE_PAIR_COUNT] = {
+    {4000, 60},
+    {3700, 70},
+    {3240, 80},
+    {2980, 90},
+    {2740, 100},
+    {2520, 110},
+    {2340, 120},
+    {2150, 130},
+    {2030, 140},
+    {1880, 150},
+    {1780, 160},
+    {1640, 170},
+    {1570, 180},
+    {1480, 190},
+    {1430, 200},
+    {1330, 210},
+    {1260, 220},
+    {1190, 230},
+    {1175, 240},
+    {1100, 250},
+    {1050, 260},
+    {1000, 270},
+    {970, 280},
+    {930, 290},
+    {870, 300}
+  };
+
   int val = analogRead(PIN_DIST_SENSOR);
 
-  if (val >= 2730)// 20-60 mm
+  for (int i = 0; i < RAW_DISTANCE_PAIR_COUNT; i++)
   {
-    int delta = val - 2730;
-    int val_range = 4095 - 2730;
-
-    float ratio = delta / (float)val_range;
-    
-    int dist_range = 60 - 20;
-
-    *dist = 60 - ratio * dist_range;
+    if (val >= pairs[i].raw)
+    {
+      *dist = pairs[i].distance;
+      return true;
+    }
   }
-  else if (val >= 1638)//60-100 mm
-  {
-    int delta = val - 1638;
-    int val_range = 2729 - 1638;
 
-    float ratio = delta / (float)val_range;
-    
-    int dist_range = 100 - 60;
-
-    *dist = 100 - ratio * dist_range;
-  }
-  else if (val >= 1092)//100-160 mm
-  {
-    int delta = val - 1092;
-    int val_range = 1637 - 1092;
-
-    float ratio = delta / (float)val_range;
-    
-    int dist_range = 160 - 100;
-
-    *dist = 160 - ratio * dist_range;
-  }
-  else if (val >= 682)//160-260 mm
-  {
-    int delta = val - 682;
-    int val_range = 1091 - 682;
-
-    float ratio = delta / (float)val_range;
-    
-    int dist_range = 260 - 160;
-
-    *dist = 260 - ratio * dist_range;
-  }
-  else if (val >= 409)//260-400 mm
-  {
-    int delta = val - 409;
-    int val_range = 681 - 409;
-
-    float ratio = delta / (float)val_range;
-    
-    int dist_range = 400 - 260;
-
-    *dist = 400 - ratio * dist_range;
-  }
-  else
-    *dist = -1;
+  *dist = 300;//max distance
 
   return true;
 }
