@@ -57,26 +57,38 @@ enum drive_op
   DRV_OP_STRAIGHT,
   DRV_OP_TURN,
   DRV_OP_CURVE,
-  DRV_OP_NONE
+  DRV_OP_UNDEFINED
 };
 
-static volatile drive_op current_drv_op = DRV_OP_NONE;
+static volatile drive_op current_drv_op = DRV_OP_UNDEFINED;
 
 static timer_group_t timer_group = TIMER_GROUP_0;
 static timer_idx_t motor_timer_idx = TIMER_0;
 
-static bool motor_timer_kill_cb(void *arg)
-{
-  //DRVSetSpeed(0, 0);
+static int left_motor_pwm_offset;
+static int right_motor_pwm_offset;
+static int left_motor_pwm;
+static int right_motor_pwm ;
 
-  //Added this back in because ISR seg faults were occuring in this
-  //function
+// mm/s
+static int max_linear_speed = 340;
+// degrees/s
+static int max_angular_speed = 180;
+
+static int eyebot_xpos, eyebot_ypos, eyebot_angle;
+static int eyebot_lin_speed, eyebot_ang_speed;
+static unsigned long eyebot_op_total_time, eyebot_op_start_time;
+
+static bool motor_kill_timer_cb(void *arg)
+{
   analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
   analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
   analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
   analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
 
-  current_drv_op = DRV_OP_NONE;
+  current_drv_op = DRV_OP_UNDEFINED;
+  eyebot_lin_speed = 0;
+  eyebot_ang_speed = 0;
 
   return true;
 }
@@ -186,7 +198,7 @@ bool EYEBOTInit()
   err = timer_init(timer_group, motor_timer_idx, &timer_config);
   assert(err == ESP_OK);
 
-  err = timer_isr_callback_add(timer_group, motor_timer_idx, motor_timer_kill_cb, NULL, 0);
+  err = timer_isr_callback_add(timer_group, motor_timer_idx, motor_kill_timer_cb, NULL, 0);
   assert(err == ESP_OK);
 
   //////////////////////////
@@ -998,28 +1010,11 @@ bool INClearTouchCallback()
 //Motor-Driving Functions
 //////////////////////////
 
-static int left_motor_offset = 0;
-static int right_motor_offset = 0;
-static int left_motor_pwm = 0;
-static int right_motor_pwm = 0;
-
-static unsigned long set_speed_start_time = 0;
-
-// mm/s
-static int max_linear_speed = 340;
-// degrees/s
-static int max_angular_speed = 180;
-
-static volatile int eyebot_xpos = 0, eyebot_ypos = 0, eyebot_angle = 0;
-static volatile int eyebot_lin_speed = 0;
-static volatile int eyebot_ang_speed = 0;
-static volatile unsigned long eyebot_op_total_time = 0;
-static volatile unsigned long eyebot_op_start_time = 0;
 
 bool DRVSetMotorOffsets(int left_offset, int right_offset)
 {
-  left_motor_offset = left_offset < -255 || left_offset > 255 ? 0 : left_offset;
-  right_motor_offset = right_offset < -255 || right_offset > 255 ? 0 : right_offset;
+  left_motor_pwm_offset = left_offset < -255 || left_offset > 255 ? 0 : left_offset;
+  right_motor_pwm_offset = right_offset < -255 || right_offset > 255 ? 0 : right_offset;
 
   return true;
 }
@@ -1056,7 +1051,7 @@ bool DRVGetPosition(int *x, int *y, int *angle)
 
   switch (current_drv_op)
   {
-    case DRV_OP_NONE:
+    case DRV_OP_UNDEFINED:
     case DRV_OP_STRAIGHT:
     case DRV_OP_CURVE:
     {
@@ -1104,10 +1099,22 @@ bool DRVGetPosition(int *x, int *y, int *angle)
 
 bool DRVSetSpeed(int lin_speed, int ang_speed)
 {
+  if (current_drv_op != DRV_OP_UNDEFINED)
+  {
+    //There is still a background timer for
+    //an ongoing drive op that must be stopped
+    timer_pause(timer_group, motor_timer_idx);
+  }
+
+  analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
+  analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
+  analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
+  analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
+
   // Set current eyebot position
-  // int x, y, angle;
-  // DRVGetPosition(&x, &y, &angle);
-  // DRVSetPosition(x, y, angle);
+  int x, y, angle;
+  DRVGetPosition(&x, &y, &angle);
+  DRVSetPosition(x, y, angle);
 
   if (lin_speed < -1 * max_linear_speed)
     lin_speed = -1 * max_linear_speed;
@@ -1139,8 +1146,8 @@ bool DRVSetSpeed(int lin_speed, int ang_speed)
     float lin_speed_percentage = lin_speed / (float)max_linear_speed;
     int motor_pwm = 255 * lin_speed_percentage;
 
-    left_motor_pwm = motor_pwm + left_motor_offset;
-    right_motor_pwm = motor_pwm + right_motor_offset;
+    left_motor_pwm = motor_pwm + left_motor_pwm_offset;
+    right_motor_pwm = motor_pwm + right_motor_pwm_offset;
 
     if (left_motor_pwm < 0)
       left_motor_pwm = 0;
@@ -1207,7 +1214,7 @@ bool DRVSetSpeed(int lin_speed, int ang_speed)
   }
 
   eyebot_op_start_time = millis();
-  eyebot_op_total_time = -1;//Could be infinite
+  eyebot_op_total_time = 0;//indefinite by default
 
   return true;
 }     
@@ -1216,18 +1223,15 @@ static bool SetMotorKillTimer(u64 time_ms)
 {
   esp_err_t err;
   if (err = timer_pause(timer_group, motor_timer_idx))
-  {
     Serial.printf("Failed to pause timer: %d\n", err);
-    return false;
-  }
 
-  //Assumes 2000 increments per s
   if (err = timer_set_counter_value(timer_group, motor_timer_idx, 0))
   {
     Serial.printf("Failed to set timer counter to zero: %d\n", err);
     return false;
   }
 
+  //Assumes 2000 increments per s
   if (err = timer_set_alarm_value(timer_group, motor_timer_idx, 2*(u64)time_ms))
   {
     Serial.printf("Failed to set timer alarm value: %d\n", err);
@@ -1301,7 +1305,7 @@ bool DRVTurn(int angle, int speed)
     angle *= -1;
   }
   
-  float time_taken = (angle / (float)speed) * 1000;
+  float time_taken = (angle / (float)speed) * 1000 / 2;
 
   if (!SetMotorKillTimer((u64)time_taken))
     return false;
@@ -1440,7 +1444,7 @@ bool DRVRemaining(int *dist)
 
 bool DRVDone()
 {
-  if (current_drv_op != DRV_OP_NONE)
+  if (current_drv_op != DRV_OP_UNDEFINED)
     return false;
   else
     return true;
@@ -1448,7 +1452,7 @@ bool DRVDone()
 
 bool DRVWait()
 {
-  while (current_drv_op != DRV_OP_NONE);
+  while (current_drv_op != DRV_OP_UNDEFINED);
 
   return true;
 }

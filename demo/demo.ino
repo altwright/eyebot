@@ -16,7 +16,7 @@ static int left_motor_offset = 0;
 static int right_motor_offset = 0;
 
 enum DemoPhase {
-  HOME_SCREEN,
+  DEMO_MENU,
   COLOUR_NAVIGATION,
   CAMERA_FEED,
   DRIVE_STRAIGHT,
@@ -27,7 +27,7 @@ enum DemoPhase {
   DISTANCE_SENSOR,
   HIT_AND_RETURN,
   COLLECT_OBJECT
-} demoPhase;
+} demo;
 
 enum HomePage {
   HOME_PAGE_1,
@@ -42,10 +42,17 @@ enum CamImageProcessing {
   SOBEL_PROC
 };
 
-enum DriveScreen {
-  DRV_SCREEN_SETTINGS_1,
-  DRV_SCREEN_SETTINGS_2,
-  DRV_SCREEN_START
+enum Screen {
+  SCREEN_SETTINGS_1,
+  SCREEN_SETTINGS_2,
+  SCREEN_START
+};
+
+enum HitAndReturnPhases {
+  HIT_PHASE_FORWARD,
+  HIT_PHASE_TURN,
+  HIT_PHASE_RETURN,
+  HIT_PHASE_STOP
 };
 
 void setup() {
@@ -58,14 +65,14 @@ void setup() {
   DRVSetMaxLinearSpeed(max_lin_speed);
   DRVSetMaxAngularSpeed(max_ang_speed);
 
-  demoPhase = HOME_SCREEN;
+  demo = DEMO_MENU;
 }
 
 void loop() {
   static bool ui_init = false;
-  switch (demoPhase)
+  switch (demo)
   {
-    case HOME_SCREEN:
+    case DEMO_MENU:
     {
       const int DEMO_OPTION_HEIGHT = 70;
       static HomePage homePage = HOME_PAGE_1;
@@ -136,17 +143,17 @@ void loop() {
           {
             if (touch_y >= 50 && touch_y <= 50 + DEMO_OPTION_HEIGHT)
             {
-              demoPhase = CAMERA_FEED;
+              demo = CAMERA_FEED;
               ui_init = false;
             }
             else if (touch_y >= 140 && touch_y <= 140 + DEMO_OPTION_HEIGHT)
             {
-              demoPhase = DRIVE_STRAIGHT;
+              demo = DRIVE_STRAIGHT;
               ui_init = false;
             }
             else if (touch_y >= 230 && touch_y <= 230 + DEMO_OPTION_HEIGHT)
             {
-              demoPhase = DRIVE_CURVE;
+              demo = DRIVE_CURVE;
               ui_init = false;
             }
 
@@ -214,17 +221,17 @@ void loop() {
           {
             if (touch_y >= 50 && touch_y <= 50 + DEMO_OPTION_HEIGHT)
             {
-              demoPhase = DRIVE_TURN;
+              demo = DRIVE_TURN;
               ui_init = false;
             }
             else if (touch_y >= 140 && touch_y <= 140 + DEMO_OPTION_HEIGHT)
             {
-              demoPhase = DRIVE_GOTO;
+              demo = DRIVE_GOTO;
               ui_init = false;
             }
             else if (touch_y >= 230 && touch_y <= 230 + DEMO_OPTION_HEIGHT)
             {
-              demoPhase = DRIVE_SET;
+              demo = DRIVE_SET;
               ui_init = false;
             }
 
@@ -242,7 +249,7 @@ void loop() {
           LCDPrintAt(40, 77, "DISTANCE");
 
           //Demo Option 2 Text
-          LCDPrintAt(15, 168, "");
+          LCDPrintAt(20, 168, "HIT->RETURN");
 
           //Demo Optin 3 Text
           LCDPrintAt(33, 259, "");
@@ -254,6 +261,15 @@ void loop() {
           snprintf(pg_str, 8, "Pg. 3/%d", NUM_PAGES);
           LCDPrintAt(LCD_WIDTH - 42, LCD_HEIGHT - 10, pg_str);
 
+          bool left_pressed;
+          INReadButton(LEFT_BUTTON, &left_pressed);
+          if (left_pressed)
+          {
+            homePage = HOME_PAGE_2;
+            ui_init = false;
+            delay(200);
+          }
+
           int touch_x = -1, touch_y = -1;
           INReadTouch(&touch_x, &touch_y);
 
@@ -261,29 +277,19 @@ void loop() {
           {
             if (touch_y >= 50 && touch_y <= 50 + DEMO_OPTION_HEIGHT)
             {
-              demoPhase = DISTANCE_SENSOR;
+              demo = DISTANCE_SENSOR;
               ui_init = false;
             }
             else if (touch_y >= 140 && touch_y <= 140 + DEMO_OPTION_HEIGHT)
             {
-              //demoPhase = DRIVE_STRAIGHT;
+              demo = HIT_AND_RETURN;
               ui_init = false;
             }
             else if (touch_y >= 230 && touch_y <= 230 + DEMO_OPTION_HEIGHT)
             {
-              //demoPhase = DRIVE_CURVE;
               ui_init = false;
             }
 
-            delay(200);
-          }
-
-          bool left_pressed;
-          INReadButton(LEFT_BUTTON, &left_pressed);
-          if (left_pressed)
-          {
-            homePage = HOME_PAGE_2;
-            ui_init = false;
             delay(200);
           }
 
@@ -388,7 +394,7 @@ void loop() {
 
       if (left_pressed)
       {
-        demoPhase = HOME_SCREEN;
+        demo = DEMO_MENU;
         ui_init = false;
         delay(200);
         break;
@@ -425,11 +431,11 @@ void loop() {
     }
     case DRIVE_STRAIGHT:
     {
-      static DriveScreen screen = DRV_SCREEN_SETTINGS_1;
+      static Screen screen = SCREEN_SETTINGS_1;
 
       switch (screen)
       {
-        case DRV_SCREEN_SETTINGS_1:
+        case SCREEN_SETTINGS_1:
         {
           if (!ui_init)
           {
@@ -511,7 +517,7 @@ void loop() {
 
           if (left_pressed)
           {
-            demoPhase = HOME_SCREEN;
+            demo = DEMO_MENU;
             ui_init = false;
             delay(200);
             break;
@@ -522,7 +528,7 @@ void loop() {
 
           if (right_pressed)
           {
-            screen = DRV_SCREEN_SETTINGS_2;
+            screen = SCREEN_SETTINGS_2;
             ui_init = false;
             delay(200);
             break;
@@ -585,14 +591,14 @@ void loop() {
 
           if (touch_x >= 5 && touch_x <= 165 && touch_y >= 240 && touch_y <= 280)
           {
-            screen = DRV_SCREEN_START;
+            screen = SCREEN_START;
             ui_init = false;
             delay(200);
           }
 
           break;
         }
-        case DRV_SCREEN_SETTINGS_2:
+        case SCREEN_SETTINGS_2:
         {
           if (!ui_init)
           {
@@ -643,7 +649,7 @@ void loop() {
           if (left_pressed)
           {
             ui_init = false;
-            screen = DRV_SCREEN_SETTINGS_1;
+            screen = SCREEN_SETTINGS_1;
             delay(200);
             break;
           }
@@ -699,7 +705,7 @@ void loop() {
 
           break;
         }
-        case DRV_SCREEN_START:
+        case SCREEN_START:
         {
           if (!ui_init)
           {
@@ -723,7 +729,7 @@ void loop() {
 
           if (touch_x >= 0 && touch_y >= 0)
           {
-            screen = DRV_SCREEN_SETTINGS_1;
+            screen = SCREEN_SETTINGS_1;
             ui_init = false;
             DRVSetSpeed(0, 0);
             delay(200);
@@ -739,11 +745,11 @@ void loop() {
     }
     case DRIVE_CURVE:
     {
-      static DriveScreen screen = DRV_SCREEN_SETTINGS_1;
+      static Screen screen = SCREEN_SETTINGS_1;
 
       switch (screen)
       {
-        case DRV_SCREEN_SETTINGS_1:
+        case SCREEN_SETTINGS_1:
         {
           if (!ui_init)
           {
@@ -841,7 +847,7 @@ void loop() {
 
           if (left_pressed)
           {
-            demoPhase = HOME_SCREEN;
+            demo = DEMO_MENU;
             ui_init = false;
             delay(200);
             break;
@@ -852,7 +858,7 @@ void loop() {
 
           if (right_pressed)
           {
-            screen = DRV_SCREEN_SETTINGS_2;
+            screen = SCREEN_SETTINGS_2;
             ui_init = false;
             delay(200);
             break;
@@ -900,14 +906,14 @@ void loop() {
 
           if (touch_x >= 5 && touch_x <= 165 && touch_y >= 240 && touch_y <= 280)
           {
-            screen = DRV_SCREEN_START;
+            screen = SCREEN_START;
             ui_init = false;
             delay(200);
           }
 
           break;
         }
-        case DRV_SCREEN_SETTINGS_2:
+        case SCREEN_SETTINGS_2:
         {
           if (!ui_init)
           {
@@ -981,7 +987,7 @@ void loop() {
 
           if (left_pressed)
           {
-            screen = DRV_SCREEN_SETTINGS_1;
+            screen = SCREEN_SETTINGS_1;
             ui_init = false;
             delay(200);
             break;
@@ -1063,7 +1069,7 @@ void loop() {
 
           break;
         }
-        case DRV_SCREEN_START:
+        case SCREEN_START:
         {
           if (!ui_init)
           {
@@ -1089,7 +1095,7 @@ void loop() {
 
           if (touch_x >= 0 && touch_y >= 0)
           {
-            screen = DRV_SCREEN_SETTINGS_1;
+            screen = SCREEN_SETTINGS_1;
             ui_init = false;
             DRVSetSpeed(0, 0);
             delay(200);
@@ -1098,7 +1104,7 @@ void loop() {
           break;
         }
         default:
-          screen = DRV_SCREEN_SETTINGS_1;
+          screen = SCREEN_SETTINGS_1;
           break;
       }
 
@@ -1106,11 +1112,11 @@ void loop() {
     }
     case DRIVE_TURN:
     {
-      static DriveScreen screen = DRV_SCREEN_SETTINGS_1;
+      static Screen screen = SCREEN_SETTINGS_1;
 
       switch (screen)
       {
-        case DRV_SCREEN_SETTINGS_1:
+        case SCREEN_SETTINGS_1:
         {
           if (!ui_init)
           {
@@ -1191,7 +1197,7 @@ void loop() {
           INReadButton(LEFT_BUTTON, &left_pressed);
           if (left_pressed)
           {
-            demoPhase = HOME_SCREEN;
+            demo = DEMO_MENU;
             ui_init = false;
             delay(200);
             break;
@@ -1201,7 +1207,7 @@ void loop() {
           INReadButton(RIGHT_BUTTON, &right_pressed);
           if (right_pressed)
           {
-            screen = DRV_SCREEN_SETTINGS_2;
+            screen = SCREEN_SETTINGS_2;
             ui_init = false;
             delay(200);
             break;
@@ -1240,14 +1246,14 @@ void loop() {
           }
           else if (touch_x >= 5 && touch_x <= 165 && touch_y >= 240 && touch_y <= 280)
           {
-            screen = DRV_SCREEN_START;
+            screen = SCREEN_START;
             ui_init = false;
             delay(200);
           }
 
           break;
         }
-        case DRV_SCREEN_SETTINGS_2:
+        case SCREEN_SETTINGS_2:
         {
           if (!ui_init)
           {
@@ -1321,7 +1327,7 @@ void loop() {
 
           if (left_pressed)
           {
-            screen = DRV_SCREEN_SETTINGS_1;
+            screen = SCREEN_SETTINGS_1;
             ui_init = false;
             delay(200);
             break;
@@ -1403,7 +1409,7 @@ void loop() {
 
           break;
         }
-        case DRV_SCREEN_START:
+        case SCREEN_START:
         {
           if (!ui_init)
           {
@@ -1429,7 +1435,7 @@ void loop() {
 
           if (touch_x >= 0 && touch_y >= 0)
           {
-            screen = DRV_SCREEN_SETTINGS_1;
+            screen = SCREEN_SETTINGS_1;
             ui_init = false;
             DRVSetSpeed(0, 0);
             delay(200);
@@ -1439,19 +1445,19 @@ void loop() {
           break;
         }
         default:
-          screen = DRV_SCREEN_SETTINGS_1;
+          screen = SCREEN_SETTINGS_1;
           break;
       }
       break;
     }
     case DRIVE_GOTO:
     {
-      static DriveScreen screen = DRV_SCREEN_SETTINGS_1;
+      static Screen screen = SCREEN_SETTINGS_1;
       static int x = 0, y = 0;
 
       switch (screen)
       {
-        case DRV_SCREEN_SETTINGS_1:
+        case SCREEN_SETTINGS_1:
         {
           if (!ui_init)
           {
@@ -1532,7 +1538,7 @@ void loop() {
           INReadButton(LEFT_BUTTON, &left_pressed);
           if (left_pressed)
           {
-            demoPhase = HOME_SCREEN;
+            demo = DEMO_MENU;
             ui_init = false;
             delay(200);
             break;
@@ -1542,7 +1548,7 @@ void loop() {
           INReadButton(RIGHT_BUTTON, &right_pressed);
           if (right_pressed)
           {
-            screen = DRV_SCREEN_SETTINGS_2;
+            screen = SCREEN_SETTINGS_2;
             ui_init = false;
             delay(200);
             break;
@@ -1604,14 +1610,14 @@ void loop() {
           }
           else if (touch_x >= 5 && touch_x <= 165 && touch_y >= 240 && touch_y <= 280)
           {
-            screen = DRV_SCREEN_START;
+            screen = SCREEN_START;
             ui_init = false;
             delay(200);
           }
 
           break;
         }
-        case DRV_SCREEN_SETTINGS_2:
+        case SCREEN_SETTINGS_2:
         {
           if (!ui_init)
           {
@@ -1684,7 +1690,7 @@ void loop() {
           INReadButton(LEFT_BUTTON, &left_pressed);
           if (left_pressed)
           {
-            screen = DRV_SCREEN_SETTINGS_1;
+            screen = SCREEN_SETTINGS_1;
             ui_init = false;
             delay(200);
             break;
@@ -1766,7 +1772,7 @@ void loop() {
 
           break;
         }
-        case DRV_SCREEN_START:
+        case SCREEN_START:
         {
           if (!ui_init)
           {
@@ -1792,7 +1798,7 @@ void loop() {
 
           if (touch_x >= 0 && touch_y >= 0)
           {
-            screen = DRV_SCREEN_SETTINGS_1;
+            screen = SCREEN_SETTINGS_1;
             ui_init = false;
             DRVSetSpeed(0, 0);
             delay(200);
@@ -1802,19 +1808,19 @@ void loop() {
           break;
         }
         default:
-          screen = DRV_SCREEN_SETTINGS_1;
+          screen = SCREEN_SETTINGS_1;
           break;
       }
       break;
     }
     case DRIVE_SET:
     {
-      static DriveScreen screen = DRV_SCREEN_SETTINGS_1;
+      static Screen screen = SCREEN_SETTINGS_1;
       static int local_lin_speed = lin_speed, local_ang_speed = ang_speed;
 
       switch (screen)
       {
-        case DRV_SCREEN_SETTINGS_1:
+        case SCREEN_SETTINGS_1:
         {
           if (!ui_init)
           {
@@ -1895,7 +1901,7 @@ void loop() {
           INReadButton(LEFT_BUTTON, &left_pressed);
           if (left_pressed)
           {
-            demoPhase = HOME_SCREEN;
+            demo = DEMO_MENU;
             ui_init = false;
             delay(200);
             break;
@@ -1905,7 +1911,7 @@ void loop() {
           INReadButton(RIGHT_BUTTON, &right_pressed);
           if (right_pressed)
           {
-            screen = DRV_SCREEN_SETTINGS_2;
+            screen = SCREEN_SETTINGS_2;
             ui_init = false;
             delay(200);
             break;
@@ -1942,14 +1948,14 @@ void loop() {
           }
           else if (touch_x >= 5 && touch_x <= 165 && touch_y >= 240 && touch_y <= 280)
           {
-            screen = DRV_SCREEN_START;
+            screen = SCREEN_START;
             ui_init = false;
             delay(200);
           }
 
           break;
         }
-        case DRV_SCREEN_SETTINGS_2:
+        case SCREEN_SETTINGS_2:
         {
           if (!ui_init)
           {
@@ -2023,7 +2029,7 @@ void loop() {
 
           if (left_pressed)
           {
-            screen = DRV_SCREEN_SETTINGS_1;
+            screen = SCREEN_SETTINGS_1;
             ui_init = false;
             delay(200);
             break;
@@ -2105,7 +2111,7 @@ void loop() {
 
           break;
         }
-        case DRV_SCREEN_START:
+        case SCREEN_START:
         {
           if (!ui_init)
           {
@@ -2131,7 +2137,7 @@ void loop() {
 
           if (touch_x >= 0 && touch_y >= 0)
           {
-            screen = DRV_SCREEN_SETTINGS_1;
+            screen = SCREEN_SETTINGS_1;
             ui_init = false;
             DRVSetSpeed(0, 0);
             delay(200);
@@ -2141,7 +2147,7 @@ void loop() {
           break;
         }
         default:
-          screen = DRV_SCREEN_SETTINGS_1;
+          screen = SCREEN_SETTINGS_1;
           break;
       }
       break;
@@ -2169,7 +2175,7 @@ void loop() {
       INReadButton(LEFT_BUTTON, &left_pressed);
       if (left_pressed)
       {
-        demoPhase = HOME_SCREEN;
+        demo = DEMO_MENU;
         ui_init = false;
         delay(200);
         break;
@@ -2195,9 +2201,242 @@ void loop() {
 
       break;
     }
+    case HIT_AND_RETURN:
+    {
+      static Screen screen = SCREEN_SETTINGS_1;
+      static int starting_angle;
+      static HitAndReturnPhases phase = HIT_PHASE_FORWARD;
+      static bool phase_init = false;
+      static unsigned long travel_start_time, travel_total_time;
+
+      switch (screen)
+      {
+        case SCREEN_SETTINGS_1:
+        {
+          if (!ui_init)
+          {
+            LCDClear();
+
+            //Exit Symbol
+            LCDDrawCircle(20, LCD_HEIGHT - 20, 10, WHITE);
+            LCDSetFontSize(1);
+            LCDSetFontColor(BLACK, WHITE);
+            LCDPrintAt(19, LCD_HEIGHT - 23, "L");
+
+            //Exit Symbol label
+            LCDSetFontColor(WHITE);
+            LCDPrintAt(34, LCD_HEIGHT - 23, "Exit");
+
+            //Linear Speed label
+            LCDSetFontSize(1);
+            LCDSetFontColor(WHITE);
+            LCDPrintAt(5, 5, "Linear Speed (mm/s)");
+
+            //Linear Speed decrease
+            LCDDrawRect(5, 20, 40, 40, WHITE);
+            LCDDrawRect(15, 38, 20, 5, BLACK);
+
+            //Linear Speed increase
+            LCDDrawRect(125, 20, 40, 40, WHITE);
+            LCDDrawRect(135, 38, 20, 5, BLACK);
+            LCDDrawRect(143, 30, 5, 21, BLACK);
+
+            //Starting Angle label
+            LCDPrintAt(5, 68, "Starting Angle (deg)");
+            
+            //Starting Angle decrease
+            LCDDrawRect(5, 82, 40, 40, WHITE);
+            LCDDrawRect(15, 100, 20, 5, BLACK);
+
+            //Starting Angle increase
+            LCDDrawRect(125, 82, 40, 40, WHITE);
+            LCDDrawRect(135, 100, 20, 5, BLACK);
+            LCDDrawRect(143, 92, 5, 21, BLACK);
+
+            //Reverse direction option
+            LCDDrawRect(5, 193, 160, 87, WHITE);
+            LCDSetFontSize(3);
+            LCDSetFontColor(BLACK, WHITE);
+            LCDPrintAt(45, 225, "START");
+
+            ui_init = true;
+          }
+
+          char val_str[8];
+          LCDSetFontSize(2);
+          LCDSetFontColor(WHITE);
+
+          //Linear Speed value
+          snprintf(val_str, 8, "%d ", lin_speed);
+          LCDPrintAt(50, 34, val_str);
+
+          //Starting Angle value
+          snprintf(val_str, 8, "%d  ", starting_angle);
+          LCDPrintAt(50, 96, val_str);
+
+          bool left_pressed;
+          INReadButton(LEFT_BUTTON, &left_pressed);
+          if (left_pressed)
+          {
+            demo = DEMO_MENU;
+            ui_init = false;
+            delay(200);
+            break;
+          }
+
+          int touch_x, touch_y;
+          INReadTouch(&touch_x, &touch_y);
+          if (touch_x >= 5 && touch_x <= 45)
+          {
+            if (touch_y >= 20 && touch_y <= 60)
+              lin_speed -= 10;
+            
+            if (touch_y >= 82 && touch_y <= 122)
+              starting_angle -= 10;
+
+            if (lin_speed < 0)
+              lin_speed = 0;
+
+            delay(200);
+          }
+          else if (touch_x >= 125 && touch_x <= 165)
+          {
+            if (touch_y >= 20 && touch_y <= 60)
+              lin_speed += 10;
+            
+            if (touch_y >= 82 && touch_y <= 122)
+              starting_angle += 10;
+
+            delay(200);
+          }
+          else if (touch_x >= 5 && touch_x <= 165 && touch_y >= 193 && touch_y <= 280)
+          {
+            screen = SCREEN_START;
+            ui_init = false;
+            delay(200);
+          }
+
+          break;
+        }
+        case SCREEN_START:
+        {
+          if (!ui_init)
+          {
+            LCDClear();
+
+            LCDDrawRect(5, 5, 160, 310, RED);
+            
+            LCDSetFontSize(4);
+            LCDSetFontColor(WHITE, RED);
+            LCDPrintAt(29, 115, "TOUCH");
+            LCDPrintAt(29, 165, "RESET");
+
+            DRVSetMotorOffsets(left_motor_offset, right_motor_offset);
+            DRVSetMaxLinearSpeed(max_lin_speed);
+            DRVSetMaxAngularSpeed(max_ang_speed);
+            DRVSetPosition(0, 0, starting_angle);
+
+            phase_init = false;
+            ui_init = true;
+          }
+
+          switch (phase)
+          {
+            case HIT_PHASE_FORWARD:
+            {
+              if (!phase_init)
+              {
+                travel_start_time = millis();
+                DRVSetSpeed(lin_speed, 0);
+                phase_init = true;
+              }
+
+              int dist;
+              PSDGet(&dist);
+
+              if (dist <= 70)
+              {
+                DRVSetSpeed(0, 0);
+                travel_total_time = millis() - travel_start_time;
+                phase = HIT_PHASE_TURN;
+                phase_init = false;
+              }
+
+              break;
+            }
+            case HIT_PHASE_TURN:
+            {
+              if (!phase_init)
+              {
+                DRVTurn(180, 180);
+                phase_init = true;
+              }
+
+              if (DRVDone())
+              {
+                phase = HIT_PHASE_RETURN;
+                phase_init = false;
+              }
+
+              break;
+            }
+            case HIT_PHASE_RETURN:
+            {
+              if (!phase_init)
+              {
+                DRVSetSpeed(lin_speed, 0);
+                travel_start_time = millis();
+                phase_init = true;
+              }
+
+              if ((millis() - travel_start_time) >= travel_total_time)
+              {
+                DRVSetSpeed(0, 0);
+                phase = HIT_PHASE_STOP;
+                phase_init = false;
+              }
+
+              break;
+            }
+            case HIT_PHASE_STOP:
+            {
+              DRVSetSpeed(0, 0);
+              break;
+            }
+            default:
+            {
+              phase = HIT_PHASE_STOP;
+              break;
+            }
+          }
+
+          int touch_x, touch_y;
+          INReadTouch(&touch_x, &touch_y);
+          if (touch_x >= 0 && touch_y >= 0)
+          {
+            screen = SCREEN_SETTINGS_1;
+            ui_init = false;
+            phase_init = false;
+            phase = HIT_PHASE_FORWARD;
+            DRVSetSpeed(0, 0);
+            delay(200);
+            break;
+          }
+
+          break;
+        }
+        default:
+        {
+          screen = SCREEN_SETTINGS_1;
+          break;
+        }    
+      }
+
+      break;
+    }
     default:
     {
-      demoPhase = HOME_SCREEN;
+      demo = DEMO_MENU;
       break;
     }
   }
