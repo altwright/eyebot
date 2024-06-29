@@ -1,6 +1,7 @@
 #include "eyebot.h"
 
 #define NUM_PAGES 3
+#define INPUT_DELAY_MS 200
 
 static rgb img[QQVGA_WIDTH*QQVGA_HEIGHT];
 static grayscale gray_img[QQVGA_WIDTH*QQVGA_HEIGHT];
@@ -26,7 +27,7 @@ enum DemoPhase {
   DRIVE_SET,
   DISTANCE_SENSOR,
   HIT_AND_RETURN,
-  COLLECT_OBJECT
+  DRIVE_TO_COLOR
 } demo;
 
 enum HomePage {
@@ -45,7 +46,7 @@ enum CamImageProcessing {
 enum Screen {
   SCREEN_SETTINGS_1,
   SCREEN_SETTINGS_2,
-  SCREEN_START
+  SCREEN_RUNNING
 };
 
 enum HitAndReturnPhases {
@@ -66,6 +67,617 @@ void setup() {
   DRVSetMaxAngularSpeed(max_ang_speed);
 
   demo = DEMO_MENU;
+}
+
+#define ROW_SPACE_PX 62
+#define VARIABLE_BUTTON_WIDTH_PX 40
+#define VARIABLE_BUTTON_HEIGHT_PX VARIABLE_BUTTON_WIDTH_PX
+
+void DrawVariableWidgetValue(const char *value, int row)
+{
+  if (row < 0)
+    row = 0;
+  
+  LCDSetFontSize(2);
+  LCDSetFontColor(WHITE);
+  LCDPrintAt(50, 34 + row*ROW_SPACE_PX, value);
+}
+
+void DemoDriveToColor()
+{
+  Screen screen = SCREEN_SETTINGS_1;
+  bool quit = false, ui_init = false, show_overlay = false;
+  rgb selected_color = RED;
+  int hue_threshold = 10, sat_threshold = 10, int_threshold = 10;
+  int lin_speed = 200, ang_speed = 150;
+
+  enum {
+    D2C_PHASE_SEEKING, 
+    D2C_PHASE_NAVIGATE
+  } phase = D2C_PHASE_SEEKING;
+  
+  while (!quit)
+  {
+    switch (screen)
+    {
+      case SCREEN_SETTINGS_1:
+      {
+        if (!ui_init)
+        {
+          LCDClear();
+
+          // Left Button
+          LCDSetFontColor(BLACK, WHITE);
+          LCDSetFontSize(1);
+          LCDDrawRect(5, LCD_HEIGHT - 15, 77, 15, WHITE);
+          LCDPrintAt(10, LCD_HEIGHT - 12, "LB: EXIT");
+
+          // Linear Speed Widget
+          LCDSetFontSize(1);
+          LCDSetFontColor(WHITE);
+          LCDPrintAt(5, 5, "Linear Speed (mm/s)");
+          // Decrease
+          #define LIN_MINUS_X 5
+          #define LIN_MINUS_Y 20
+          #define LIN_MINUS_WIDTH 40
+          #define LIN_MINUS_HEIGHT 40
+          LCDDrawRect(LIN_MINUS_X, LIN_MINUS_Y, LIN_MINUS_WIDTH, LIN_MINUS_HEIGHT, WHITE);
+          LCDDrawRect(LIN_MINUS_X + 10, LIN_MINUS_Y + 18, 20, 5, BLACK);
+          // Increase
+          #define LIN_PLUS_X 125
+          #define LIN_PLUS_Y 20
+          #define LIN_PLUS_WIDTH 40
+          #define LIN_PLUS_HEIGHT 40
+          LCDDrawRect(LIN_PLUS_X, LIN_PLUS_Y, LIN_PLUS_WIDTH, LIN_PLUS_HEIGHT, WHITE);
+          LCDDrawRect(LIN_PLUS_X + 10, LIN_PLUS_Y + 18, 20, 5, BLACK);
+          LCDDrawRect(LIN_PLUS_X + 18, LIN_PLUS_Y + 10, 5, 21, BLACK);
+
+          // Angular Speed Widget
+          LCDSetFontSize(1);
+          LCDSetFontColor(WHITE);
+          LCDPrintAt(5, 67, "Angular Speed (deg./s)");
+          // Decrease
+          #define ANG_MINUS_X 5
+          #define ANG_MINUS_Y 82
+          #define ANG_MINUS_WIDTH 40
+          #define ANG_MINUS_HEIGHT 40
+          LCDDrawRect(ANG_MINUS_X, ANG_MINUS_Y, ANG_MINUS_WIDTH, ANG_MINUS_HEIGHT, WHITE);
+          LCDDrawRect(ANG_MINUS_X + 10, ANG_MINUS_Y + 18, 20, 5, BLACK);
+          // Increase
+          #define ANG_PLUS_X 125
+          #define ANG_PLUS_Y 82
+          #define ANG_PLUS_WIDTH 40
+          #define ANG_PLUS_HEIGHT 40
+          LCDDrawRect(ANG_PLUS_X, ANG_PLUS_Y, ANG_PLUS_WIDTH, ANG_PLUS_HEIGHT, WHITE);
+          LCDDrawRect(ANG_PLUS_X + 10, ANG_PLUS_Y + 18, 20, 5, BLACK);
+          LCDDrawRect(ANG_PLUS_X + 18, ANG_PLUS_Y + 10, 5, 21, BLACK);
+
+          byte r, g, b;
+          IPGetRGB(selected_color, &r, &g, &b);
+          char col_str[32];
+          snprintf(col_str, 32, "Selected Col. (%u,%u,%u)", r, g, b);
+          LCDPrintAt(5, 5 + 2*ROW_SPACE_PX, col_str);
+          LCDDrawRect(5, 20 + 2*ROW_SPACE_PX, 40, 40, selected_color);
+          LCDDrawRect(50, 20 + 2*ROW_SPACE_PX, 115, 40, WHITE);
+          LCDSetFontSize(2);
+          LCDSetFontColor(BLACK, WHITE);
+          LCDPrintAt(61, 33 + 2*ROW_SPACE_PX, "RESELECT");
+
+          #define START_X 5
+          #define START_Y 5 + 3*ROW_SPACE_PX
+          #define START_X_OFF 23
+          #define START_Y_OFF 37
+          #define START_WIDTH 160
+          #define START_HEIGHT 107
+          LCDDrawRect(START_X, START_Y, START_WIDTH, START_HEIGHT, WHITE);
+          LCDSetFontSize(4);
+          LCDPrintAt(START_X + START_X_OFF, START_Y + START_Y_OFF, "START");
+
+          ui_init = true;
+        }
+
+        char val_str[8];
+        snprintf(val_str, 8, "%d ", lin_speed);
+        DrawVariableWidgetValue(val_str, 0);
+
+        snprintf(val_str, 8, "%d ", ang_speed);
+        DrawVariableWidgetValue(val_str, 1);
+
+        bool left_pressed;
+        INReadButton(LEFT_BUTTON, &left_pressed);
+        if (left_pressed)
+        {
+          quit = true;
+
+          LCDSetFontColor(RED, WHITE);
+          LCDSetFontSize(1);
+          LCDPrintAt(10, LCD_HEIGHT - 12, "LB: EXIT");
+          delay(INPUT_DELAY_MS);
+          LCDSetFontColor(BLACK, WHITE);
+          LCDPrintAt(10, LCD_HEIGHT - 12, "LB: EXIT");
+        }
+
+        int t_x, t_y;
+        INReadTouch(&t_x, &t_y);
+        if (t_x >= 5 && t_x <= 5 + VARIABLE_BUTTON_WIDTH_PX)
+        {
+          if (t_y >= 20 && t_y <= 20 + VARIABLE_BUTTON_HEIGHT_PX)
+          {
+            lin_speed -= 10;
+
+            if (lin_speed < 0)
+              lin_speed = 0;
+            
+            LCDDrawRect(15, 38, 20, 5, RED);
+            delay(INPUT_DELAY_MS);
+            LCDDrawRect(15, 38, 20, 5, BLACK);
+          }
+          else if (t_y >= 20 + ROW_SPACE_PX && t_y <= 20 + ROW_SPACE_PX + VARIABLE_BUTTON_HEIGHT_PX)
+          {
+            ang_speed -= 10;
+
+            if (ang_speed < 0)
+              ang_speed = 0;
+            
+            LCDDrawRect(15, 38 + ROW_SPACE_PX, 20, 5, RED);
+            delay(INPUT_DELAY_MS);
+            LCDDrawRect(15, 38 + ROW_SPACE_PX, 20, 5, BLACK);
+          }
+        }
+        else if (t_x >= 125 && t_x <= 125 + VARIABLE_BUTTON_WIDTH_PX)
+        {
+          if (t_y >= 20 && t_y <= 20 + VARIABLE_BUTTON_HEIGHT_PX)
+          {
+            lin_speed += 10;
+
+            LCDDrawRect(135, 38, 20, 5, RED);
+            LCDDrawRect(143, 30, 5, 21, RED);
+            delay(INPUT_DELAY_MS);
+            LCDDrawRect(135, 38, 20, 5, BLACK);
+            LCDDrawRect(143, 30, 5, 21, BLACK);
+          }
+          else if (t_y >= 20 + ROW_SPACE_PX && t_y <= 20 + ROW_SPACE_PX + VARIABLE_BUTTON_HEIGHT_PX)
+          {
+            ang_speed += 10;
+
+            LCDDrawRect(135, 38 + ROW_SPACE_PX, 20, 5, RED);
+            LCDDrawRect(143, 30 + ROW_SPACE_PX, 5, 21, RED);
+            delay(INPUT_DELAY_MS);
+            LCDDrawRect(135, 38 + ROW_SPACE_PX, 20, 5, BLACK);
+            LCDDrawRect(143, 30 + ROW_SPACE_PX, 5, 21, BLACK);
+          }
+        }
+        else if (t_x >= 50 && t_x <= 165 && t_y >= 20 + 2*ROW_SPACE_PX && t_y <= 20 + 2*ROW_SPACE_PX + VARIABLE_BUTTON_HEIGHT_PX)
+        {
+          screen = SCREEN_SETTINGS_2;
+          ui_init = false;
+
+          LCDSetFontSize(2);
+          LCDSetFontColor(RED, WHITE);
+          LCDPrintAt(61, 33 + 2*ROW_SPACE_PX, "RESELECT");
+          delay(INPUT_DELAY_MS);
+          LCDSetFontColor(BLACK, WHITE);
+          LCDPrintAt(61, 33 + 2*ROW_SPACE_PX, "RESELECT");
+        }
+        else if (t_x >= START_X && t_x <= START_X + START_WIDTH && t_y >= START_Y && t_y <= START_Y + START_HEIGHT)
+        {
+          screen = SCREEN_RUNNING;
+          ui_init = false;
+
+          LCDSetFontSize(4);
+          LCDSetFontColor(RED, WHITE);
+          LCDPrintAt(START_X + START_X_OFF, START_Y + START_Y_OFF, "START");
+          delay(INPUT_DELAY_MS);
+          LCDSetFontColor(BLACK, WHITE);
+          LCDPrintAt(START_X + START_X_OFF, START_Y + START_Y_OFF, "START");
+        }
+
+        break;
+      }
+      case SCREEN_SETTINGS_2:
+      {
+        if (!ui_init)
+        {
+          LCDClear();
+
+          LCDSetFontColor(BLACK, WHITE);
+          LCDSetFontSize(1);
+          // Left Button
+          LCDDrawRect(5, LCD_HEIGHT - 15, 77, 15, WHITE);
+          LCDPrintAt(10, LCD_HEIGHT - 12, "LB: EXIT");
+          // Right Button
+          LCDDrawRect(87, LCD_HEIGHT - 15, 78, 15, WHITE);
+          LCDPrintAt(93, LCD_HEIGHT - 12, "RB: OVERLAY");
+
+          #define MINUS_START_X 50
+          #define MINUS_WIDTH 55
+          #define PLUS_START_X 110
+          #define PLUS_WIDTH 55
+          #define WIDGET_HEIGHT 30
+          // Hue Theshold Widget
+          #define HUE_Y 180
+          LCDDrawRect(MINUS_START_X, HUE_Y, MINUS_WIDTH, WIDGET_HEIGHT, WHITE);
+          LCDDrawRect(MINUS_START_X + 20, HUE_Y + 13, 16, 4, BLACK);
+          LCDDrawRect(PLUS_START_X, HUE_Y, PLUS_WIDTH, WIDGET_HEIGHT, WHITE);
+          LCDDrawRect(PLUS_START_X + 20, HUE_Y + 13, 16, 4, BLACK);
+          LCDDrawRect(PLUS_START_X + 26, HUE_Y + 7, 4, 16, BLACK);
+          LCDSetFontSize(1);
+          LCDSetFontColor(WHITE);
+          LCDPrintAt(5, HUE_Y - 10, "Hue Threshold:");
+          // Plus symbol
+          LCDDrawRect(6, HUE_Y + 9, 1, 5, WHITE);
+          LCDDrawRect(4, HUE_Y + 11, 5, 1, WHITE);
+          // Minus symbol
+          LCDDrawRect(4, HUE_Y + 17, 5, 1, WHITE);
+
+          // Saturation Threshod Widget
+          #define SAT_Y 225
+          LCDDrawRect(MINUS_START_X, SAT_Y, MINUS_WIDTH, WIDGET_HEIGHT, WHITE);
+          LCDDrawRect(MINUS_START_X + 20, SAT_Y + 13, 16, 4, BLACK);
+          LCDDrawRect(PLUS_START_X, SAT_Y, PLUS_WIDTH, WIDGET_HEIGHT, WHITE);
+          LCDDrawRect(PLUS_START_X + 20, SAT_Y + 13, 16, 4, BLACK);
+          LCDDrawRect(PLUS_START_X + 26, SAT_Y + 7, 4, 16, BLACK);
+          LCDSetFontSize(1);
+          LCDSetFontColor(WHITE);
+          LCDPrintAt(5, SAT_Y - 10, "Saturation Threshold:");
+          // Plus symbol
+          LCDDrawRect(6, SAT_Y + 9, 1, 5, WHITE);
+          LCDDrawRect(4, SAT_Y + 11, 5, 1, WHITE);
+          // Minus symbol
+          LCDDrawRect(4, SAT_Y + 17, 5, 1, WHITE);
+
+          // Intensity Threshod Widget
+          #define INT_Y 270
+          LCDDrawRect(MINUS_START_X, INT_Y, MINUS_WIDTH, WIDGET_HEIGHT, WHITE);
+          LCDDrawRect(MINUS_START_X + 20, INT_Y + 13, 16, 4, BLACK);
+          LCDDrawRect(PLUS_START_X, INT_Y, PLUS_WIDTH, WIDGET_HEIGHT, WHITE);
+          LCDDrawRect(PLUS_START_X + 20, INT_Y + 13, 16, 4, BLACK);
+          LCDDrawRect(PLUS_START_X + 26, INT_Y + 7, 4, 16, BLACK);
+          LCDSetFontSize(1);
+          LCDSetFontColor(WHITE);
+          LCDPrintAt(5, INT_Y - 10, "Intensity Threshold: ");
+          // Plus symbol
+          LCDDrawRect(6, INT_Y + 9, 1, 5, WHITE);
+          LCDDrawRect(4, INT_Y + 11, 5, 1, WHITE);
+          // Minus symbol
+          LCDDrawRect(4, INT_Y + 17, 5, 1, WHITE);
+
+          // Colour Sampler
+          #define SAMPLER_START_X 50
+          #define SAMPLER_START_Y 125
+          #define SAMPLER_WIDTH 115
+          #define SAMPLER_HEIGHT 40
+          LCDDrawRect(SAMPLER_START_X, SAMPLER_START_Y, SAMPLER_WIDTH, SAMPLER_HEIGHT, WHITE);
+          LCDSetFontSize(2);
+          LCDSetFontColor(BLACK, WHITE);
+          LCDPrintAt(SAMPLER_START_X + 25, SAMPLER_START_Y + 13, "SAMPLE");
+
+          ui_init = true;
+        }
+
+        CAMGetImage(img);
+
+        // int sum_r = 0, sum_g = 0,  sum_b = 0, num_pixels = 0;
+        // for (int y = QQVGA_HEIGHT/2 - 1; y <= QQVGA_HEIGHT/2 + 1; y++)
+        // {
+        //   for (int x = QQVGA_WIDTH/2 - 1; x <= QQVGA_WIDTH/2 + 1; x++)
+        //   {
+        //     byte r, g, b;
+        //     IPGetRGB(img[y*QQVGA_WIDTH + x], &r, &g, &b);
+        //     sum_r += r;
+        //     sum_g += g;
+        //     sum_b += b;
+
+        //     num_pixels++;
+        //   }
+        // }
+
+        rgb sampled_pixel = img[QQVGA_HEIGHT/2*QQVGA_WIDTH + QQVGA_WIDTH/2];
+        // IPSetRGB(sum_r / num_pixels, sum_g / num_pixels, sum_b / num_pixels, &sampled_pixel);
+
+        // Sampled Colour
+        LCDDrawRect(5, 125, VARIABLE_BUTTON_WIDTH_PX, VARIABLE_BUTTON_HEIGHT_PX, sampled_pixel);
+
+        if (show_overlay)
+        {
+          hsi chosen;
+          IPRGBToHSI(selected_color, &chosen);
+
+          for (int y = 0; y < QQVGA_HEIGHT; y++)
+          {
+            for (int x = 0; x < QQVGA_WIDTH; x++)
+            {
+              hsi pixel;
+              IPRGBToHSI(img[y*QQVGA_WIDTH + x], &pixel);
+
+              if (pixel.hue >= (chosen.hue - hue_threshold) && pixel.hue <= (chosen.hue + hue_threshold) &&
+                  pixel.saturation >= (chosen.saturation - sat_threshold) && pixel.saturation <= (chosen.saturation + sat_threshold) &&
+                  pixel.intensity >= (chosen.intensity - int_threshold) && pixel.intensity <= (chosen.intensity + int_threshold))
+                gray_img[y*QQVGA_WIDTH + x] = 0xFF;
+              else
+                gray_img[y*QQVGA_WIDTH + x] = 0;
+            }
+          }
+
+          LCDDrawImage(5, 0, QQVGA_WIDTH, QQVGA_HEIGHT, gray_img);
+        }
+        else 
+        {
+          LCDDrawImage(5, 0, QQVGA_WIDTH, QQVGA_HEIGHT, img);
+          // Sampled Colour crosshair
+          LCDDrawRect(5 + QQVGA_WIDTH/2, QQVGA_HEIGHT/2 - 2, 1, 5, RED);
+          LCDDrawRect(5 + QQVGA_WIDTH/2 - 2, QQVGA_HEIGHT/2, 5, 1, RED);
+        }
+
+        #define VAL_STR_LEN 4
+        char val_str[VAL_STR_LEN];
+
+        #define VAL_X 12
+        #define VAL_Y 7
+
+        LCDSetFontColor(WHITE);
+
+        // Hue Threshold Values
+        LCDSetFontSize(2);
+        snprintf(val_str, VAL_STR_LEN, "%d ", hue_threshold);
+        LCDPrintAt(VAL_X, HUE_Y + VAL_Y, val_str);
+
+        // Saturation Threshold Values
+        snprintf(val_str, VAL_STR_LEN, "%d ", sat_threshold);
+        LCDSetFontSize(2);
+        LCDPrintAt(VAL_X, SAT_Y + VAL_Y, val_str);
+
+        // Intensity Theshold Values
+        snprintf(val_str, VAL_STR_LEN, "%d ", int_threshold);
+        LCDSetFontSize(2);
+        LCDPrintAt(VAL_X, INT_Y + VAL_Y, val_str);
+
+        bool left_pressed;
+        INReadButton(LEFT_BUTTON, &left_pressed);
+        if (left_pressed)
+        {
+          screen = SCREEN_SETTINGS_1;
+          ui_init = false;
+          LCDSetFontColor(RED, WHITE);
+          LCDSetFontSize(1);
+          LCDPrintAt(10, LCD_HEIGHT - 12, "LB: EXIT");
+          delay(INPUT_DELAY_MS);
+          LCDSetFontColor(BLACK, WHITE);
+          LCDPrintAt(10, LCD_HEIGHT - 12, "LB: EXIT");
+        }
+
+        bool right_pressed;
+        INReadButton(RIGHT_BUTTON, &right_pressed);
+        if (right_pressed)
+        {
+          show_overlay = !show_overlay;
+
+          LCDSetFontColor(RED, WHITE);
+          LCDSetFontSize(1);
+          LCDPrintAt(93, LCD_HEIGHT - 12, "RB: OVERLAY");
+          delay(INPUT_DELAY_MS);
+          LCDSetFontColor(BLACK, WHITE);
+          LCDPrintAt(93, LCD_HEIGHT - 12, "RB: OVERLAY");
+        }
+
+        int t_x, t_y;
+        INReadTouch(&t_x, &t_y);
+        if (t_x >= SAMPLER_START_X && t_x <= SAMPLER_START_X + SAMPLER_WIDTH && t_y >= SAMPLER_START_Y && t_y <= SAMPLER_START_Y + SAMPLER_HEIGHT)
+        {
+          selected_color = sampled_pixel;
+          LCDSetFontSize(2);
+          LCDSetFontColor(RED, WHITE);
+          LCDPrintAt(SAMPLER_START_X + 25, SAMPLER_START_Y + 13, "SAMPLE");
+          delay(INPUT_DELAY_MS);
+          LCDSetFontColor(BLACK, WHITE);
+          LCDPrintAt(SAMPLER_START_X + 25, SAMPLER_START_Y + 13, "SAMPLE");
+        }
+        else if (t_x >= MINUS_START_X && t_x <= MINUS_START_X + MINUS_WIDTH)
+        {
+          if (t_y >= HUE_Y && t_y <= HUE_Y + WIDGET_HEIGHT)
+          {
+            hue_threshold--;
+            if (hue_threshold < 0)
+              hue_threshold = 0;
+            
+            LCDDrawRect(MINUS_START_X + 20, HUE_Y + 13, 16, 4, RED);
+            delay(INPUT_DELAY_MS);
+            LCDDrawRect(MINUS_START_X + 20, HUE_Y + 13, 16, 4, BLACK);
+          }
+          else if (t_y >= SAT_Y && t_y <= SAT_Y + WIDGET_HEIGHT)
+          {
+            sat_threshold--;
+            if (sat_threshold < 0)
+              sat_threshold = 0;
+            
+            LCDDrawRect(MINUS_START_X + 20, SAT_Y + 13, 16, 4, RED);
+            delay(INPUT_DELAY_MS);
+            LCDDrawRect(MINUS_START_X + 20, SAT_Y + 13, 16, 4, BLACK);
+          }
+          else if (t_y >= INT_Y && t_y <= INT_Y + WIDGET_HEIGHT)
+          {
+            int_threshold--;
+            if (int_threshold < 0)
+              int_threshold = 0;
+            
+            LCDDrawRect(MINUS_START_X + 20, INT_Y + 13, 16, 4, RED);
+            delay(INPUT_DELAY_MS);
+            LCDDrawRect(MINUS_START_X + 20, INT_Y + 13, 16, 4, BLACK);
+          }
+        }
+        else if (t_x >= PLUS_START_X && t_x <= PLUS_START_X + PLUS_WIDTH)
+        {
+          if (t_y >= HUE_Y && t_y <= HUE_Y + WIDGET_HEIGHT)
+          {
+            hue_threshold++;   
+
+            LCDDrawRect(PLUS_START_X + 20, HUE_Y + 13, 16, 4, RED);
+            LCDDrawRect(PLUS_START_X + 26, HUE_Y + 7, 4, 16, RED);
+            delay(INPUT_DELAY_MS);
+            LCDDrawRect(PLUS_START_X + 20, HUE_Y + 13, 16, 4, BLACK);
+            LCDDrawRect(PLUS_START_X + 26, HUE_Y + 7, 4, 16, BLACK);
+          }
+          else if (t_y >= SAT_Y && t_y <= SAT_Y + WIDGET_HEIGHT)
+          {
+            sat_threshold++;  
+
+            LCDDrawRect(PLUS_START_X + 20, SAT_Y + 13, 16, 4, RED);
+            LCDDrawRect(PLUS_START_X + 26, SAT_Y + 7, 4, 16, RED);
+            delay(INPUT_DELAY_MS);
+            LCDDrawRect(PLUS_START_X + 20, SAT_Y + 13, 16, 4, BLACK);
+            LCDDrawRect(PLUS_START_X + 26, SAT_Y + 7, 4, 16, BLACK);
+          }
+          else if (t_y >= INT_Y && t_y <= INT_Y + WIDGET_HEIGHT)
+          {
+            int_threshold++;
+
+            LCDDrawRect(PLUS_START_X + 20, INT_Y + 13, 16, 4, RED);
+            LCDDrawRect(PLUS_START_X + 26, INT_Y + 7, 4, 16, RED);
+            delay(INPUT_DELAY_MS);
+            LCDDrawRect(PLUS_START_X + 20, INT_Y + 13, 16, 4, BLACK);
+            LCDDrawRect(PLUS_START_X + 26, INT_Y + 7, 4, 16, BLACK);
+          }
+        }
+        
+        break;
+      }
+      case SCREEN_RUNNING:
+      {
+        if (!ui_init)
+        {
+          LCDClear();
+
+          #define RESET_X 5
+          #define RESET_Y 2 * LCD_HEIGHT / 3
+          #define RESET_WIDTH LCD_WIDTH - 10
+          #define RESET_HEIGHT LCD_HEIGHT - RESET_Y - 5
+          LCDDrawRect(RESET_X, RESET_Y, RESET_WIDTH, RESET_HEIGHT, RED);
+          LCDSetFontSize(4);
+          LCDSetFontColor(WHITE, RED);
+          LCDPrintAt(RESET_X + 23, RESET_Y + 20, "TOUCH");
+          LCDPrintAt(RESET_X + 23, RESET_Y + 55, "RESET");
+
+          ui_init = true;
+        }
+
+        CAMGetImage(img);
+
+        //Reuse static memory
+        uint16_t *hori_hist = (uint16_t*)gray_img;
+        uint16_t *vert_hist = (uint16_t*)edge_img;
+
+        memset(hori_hist, 0, QQVGA_WIDTH*sizeof(uint16_t));
+        memset(vert_hist, 0, QQVGA_HEIGHT*sizeof(uint16_t));
+
+        hsi chosen_hsi;
+        IPRGBToHSI(selected_color, &chosen_hsi);
+
+        int hori_hist_max_idx = 0, vert_hist_max_idx = 0;
+
+        for (int y = 0; y < QQVGA_HEIGHT; y++)
+        {
+          for (int x = 0; x < QQVGA_WIDTH; x++)
+          {
+            hsi current_hsi;
+            IPRGBToHSI(img[y*QQVGA_WIDTH + x], &current_hsi);
+
+            if (current_hsi.hue >= (chosen_hsi.hue - hue_threshold) && current_hsi.hue <= (chosen_hsi.hue + hue_threshold) &&
+                current_hsi.saturation >= (chosen_hsi.saturation - sat_threshold) && current_hsi.saturation <= (chosen_hsi.saturation + sat_threshold) &&
+                current_hsi.intensity >= (chosen_hsi.intensity - int_threshold) && current_hsi.intensity <= (current_hsi.intensity + int_threshold))
+            {
+              vert_hist[y]++;
+              hori_hist[x]++;
+            }
+
+            if (hori_hist[x] > hori_hist[hori_hist_max_idx])
+              hori_hist_max_idx = x;
+          }
+
+          if (vert_hist[y] > vert_hist[vert_hist_max_idx])
+            vert_hist_max_idx = y;
+        }
+
+        int dist;
+        PSDGet(&dist);
+        #define MIN_DIST 100
+
+        switch (phase)
+        {
+          case D2C_PHASE_SEEKING:
+          {           
+            if (dist > MIN_DIST)
+            {
+              if (hori_hist_max_idx <= QQVGA_WIDTH / 3)
+                DRVSetSpeed(0, ang_speed);
+              else if (hori_hist_max_idx >= 2 * QQVGA_WIDTH / 3)
+                DRVSetSpeed(0, -1*ang_speed);
+              else
+                phase = D2C_PHASE_NAVIGATE;
+            }
+            else
+              DRVSetSpeed(0, 0);
+
+            break;
+          }
+          case D2C_PHASE_NAVIGATE:
+          {
+            if (dist > MIN_DIST)
+            {
+              if (hori_hist_max_idx <= QQVGA_WIDTH / 3 || hori_hist_max_idx >= 2 * QQVGA_WIDTH / 3)
+                phase = D2C_PHASE_SEEKING;
+              else
+                DRVSetSpeed(lin_speed, 0);
+            }
+            else
+              DRVSetSpeed(0, 0);
+            
+            break;
+          }
+          default:
+          {
+            screen = SCREEN_SETTINGS_1;
+            ui_init = false;
+            DRVSetSpeed(0, 0);
+            break;
+          }
+        }
+
+        LCDDrawImage(5, 5, QQVGA_WIDTH, QQVGA_HEIGHT, img);
+        LCDDrawRect(5 + hori_hist_max_idx, 5, 1, QQVGA_HEIGHT, RED);
+        LCDDrawRect(5, 5 + vert_hist_max_idx, QQVGA_WIDTH, 1, RED);
+
+        LCDSetFontSize(2);
+        LCDSetFontColor(WHITE);
+        char str[16];
+        snprintf(str, 16, "DIST: %d mm  ", dist);
+        LCDPrintAt(5, QQVGA_HEIGHT + 10, str);
+
+        int t_x, t_y;
+        INReadTouch(&t_x, &t_y);
+        if (t_x >= 0 && t_y >= 0)
+        {
+          ui_init = false;
+          screen = SCREEN_SETTINGS_1;
+          DRVSetSpeed(0, 0);
+
+          LCDSetFontSize(4);
+          LCDSetFontColor(BLACK, RED);
+          LCDPrintAt(RESET_X + 23, RESET_Y + 20, "TOUCH");
+          LCDPrintAt(RESET_X + 23, RESET_Y + 55, "RESET");
+          delay(INPUT_DELAY_MS);
+        }
+
+        break;
+      }
+      default:
+      {
+        screen = SCREEN_SETTINGS_1;
+        ui_init = false;
+        break;
+      }
+    }
+  }
+  
 }
 
 void loop() {
@@ -252,7 +864,7 @@ void loop() {
           LCDPrintAt(20, 168, "HIT->RETURN");
 
           //Demo Optin 3 Text
-          LCDPrintAt(33, 259, "");
+          LCDPrintAt(20, 259, "DRV 2 COLOR");
 
           //Page number
           LCDSetFontSize(1);
@@ -287,6 +899,7 @@ void loop() {
             }
             else if (touch_y >= 230 && touch_y <= 230 + DEMO_OPTION_HEIGHT)
             {
+              demo = DRIVE_TO_COLOR;
               ui_init = false;
             }
 
@@ -591,7 +1204,7 @@ void loop() {
 
           if (touch_x >= 5 && touch_x <= 165 && touch_y >= 240 && touch_y <= 280)
           {
-            screen = SCREEN_START;
+            screen = SCREEN_RUNNING;
             ui_init = false;
             delay(200);
           }
@@ -705,7 +1318,7 @@ void loop() {
 
           break;
         }
-        case SCREEN_START:
+        case SCREEN_RUNNING:
         {
           if (!ui_init)
           {
@@ -906,7 +1519,7 @@ void loop() {
 
           if (touch_x >= 5 && touch_x <= 165 && touch_y >= 240 && touch_y <= 280)
           {
-            screen = SCREEN_START;
+            screen = SCREEN_RUNNING;
             ui_init = false;
             delay(200);
           }
@@ -1069,7 +1682,7 @@ void loop() {
 
           break;
         }
-        case SCREEN_START:
+        case SCREEN_RUNNING:
         {
           if (!ui_init)
           {
@@ -1246,7 +1859,7 @@ void loop() {
           }
           else if (touch_x >= 5 && touch_x <= 165 && touch_y >= 240 && touch_y <= 280)
           {
-            screen = SCREEN_START;
+            screen = SCREEN_RUNNING;
             ui_init = false;
             delay(200);
           }
@@ -1409,7 +2022,7 @@ void loop() {
 
           break;
         }
-        case SCREEN_START:
+        case SCREEN_RUNNING:
         {
           if (!ui_init)
           {
@@ -1610,7 +2223,7 @@ void loop() {
           }
           else if (touch_x >= 5 && touch_x <= 165 && touch_y >= 240 && touch_y <= 280)
           {
-            screen = SCREEN_START;
+            screen = SCREEN_RUNNING;
             ui_init = false;
             delay(200);
           }
@@ -1772,7 +2385,7 @@ void loop() {
 
           break;
         }
-        case SCREEN_START:
+        case SCREEN_RUNNING:
         {
           if (!ui_init)
           {
@@ -1948,7 +2561,7 @@ void loop() {
           }
           else if (touch_x >= 5 && touch_x <= 165 && touch_y >= 240 && touch_y <= 280)
           {
-            screen = SCREEN_START;
+            screen = SCREEN_RUNNING;
             ui_init = false;
             delay(200);
           }
@@ -2111,7 +2724,7 @@ void loop() {
 
           break;
         }
-        case SCREEN_START:
+        case SCREEN_RUNNING:
         {
           if (!ui_init)
           {
@@ -2311,14 +2924,14 @@ void loop() {
           }
           else if (touch_x >= 5 && touch_x <= 165 && touch_y >= 193 && touch_y <= 280)
           {
-            screen = SCREEN_START;
+            screen = SCREEN_RUNNING;
             ui_init = false;
             delay(200);
           }
 
           break;
         }
-        case SCREEN_START:
+        case SCREEN_RUNNING:
         {
           if (!ui_init)
           {
@@ -2434,9 +3047,17 @@ void loop() {
 
       break;
     }
+    case DRIVE_TO_COLOR:
+    {
+      DemoDriveToColor();
+      ui_init = false;
+      demo = DEMO_MENU;
+      break;
+    }
     default:
     {
       demo = DEMO_MENU;
+      ui_init = false;
       break;
     }
   }

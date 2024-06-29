@@ -224,7 +224,6 @@ bool DRVWait();
 /////////////////////////////////////////////
 
 // Read distance value in mm (20-400) from distance sensor.
-// Closer than 20 mm inverts distance reading, greater than 400 mm returns -1 in dist.
 bool PSDGet(int *dist);
 
 // Read raw value from distance sensor
