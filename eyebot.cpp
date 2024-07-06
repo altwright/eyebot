@@ -705,12 +705,12 @@ bool LCDRefresh()
   return true;
 }
 
-bool LCDClear()
-{
-  tft.fillScreen(TFT_BLACK);
+// bool LCDClear()
+// {
+//   tft.fillScreen(TFT_BLACK);
 
-  return true;
-}
+//   return true;
+// }
 
 bool LCDSetCursor(int xpos, int ypos)
 {
@@ -756,15 +756,15 @@ bool LCDSetFontColor(rgb fg, rgb bg)
   return true;
 }
 
-bool LCDSetFontSize(int size)
-{
-  if (size <= 0 || size > 0xFF)
-    return false;
+// bool LCDSetFontSize(int size)
+// {
+//   if (size <= 0 || size > 0xFF)
+//     return false;
 
-  tft.setTextSize(size);
+//   tft.setTextSize(size);
 
-  return true;
-}
+//   return true;
+// }
 
 bool LCDPrint(const char *str)
 {
@@ -796,16 +796,16 @@ bool LCDPrintAt(int xpos, int ypos, const char *str)
   return true;
 }
 
-bool LCDGetSize(int *lcd_width, int *lcd_height)
-{
-  if (!lcd_width || !lcd_height)
-    return false;
+// bool LCDGetSize(int *lcd_width, int *lcd_height)
+// {
+//   if (!lcd_width || !lcd_height)
+//     return false;
 
-  *lcd_width = LCD_WIDTH;
-  *lcd_height = LCD_HEIGHT;
+//   *lcd_width = LCD_WIDTH;
+//   *lcd_height = LCD_HEIGHT;
 
-  return true;
-}
+//   return true;
+// }
 
 bool LCDSetPixel(int xpos, int ypos, rgb hue)
 {
@@ -1528,4 +1528,155 @@ bool PSDGetRaw(int *val)
   *val = analogRead(PIN_DIST_SENSOR);
 
   return false;
+}
+
+/////////////////
+//Old ROBIOS API
+/////////////////
+
+int LCDPrintf(const char* format, ...)
+{
+  if (!format)
+    return -1;
+
+  va_list arg_ptr;
+  va_start(arg_ptr, format);
+  char *str_buf = (char*)lcd_buf;
+
+  vsnprintf(str_buf, sizeof(lcd_buf), format, arg_ptr);
+
+  tft.print(str_buf);
+
+  return 0;
+}
+
+int LCDSetPrintf(int row, int column, const char *format, ...)
+{
+  if (!format)
+    return -1;
+  
+  tft.setCursor(column, row);
+
+  va_list arg_ptr;
+  va_start(arg_ptr, format);
+  char *str_buf = (char*)lcd_buf;
+
+  vsnprintf(str_buf, sizeof(lcd_buf), format, arg_ptr);
+
+  tft.print(str_buf);
+
+  return 0;
+}
+
+int LCDClear()
+{
+  tft.fillScreen(TFT_BLACK);
+
+  return 0;
+}
+
+int LCDSetPos(int row, int column)
+{
+  tft.setCursor(column, row);
+
+  return 0;
+}
+
+int LCDGetPos(int *row, int *column)
+{
+  if (!row || !column)
+    return -1;
+
+  *column = tft.getCursorX();
+  *row = tft.getCursorY();
+
+  return 0;
+}
+
+int LCDSetColor(COLOR fg, COLOR bg)
+{
+  rgb565 fg_hue = tft.color24to16(fg);
+  rgb565 bg_hue = tft.color24to16(bg);
+  tft.setTextColor(fg_hue, bg_hue);
+ 
+  return 0;
+}
+
+int LCDSetFont(int font, int variation)
+{
+  tft.setTextFont(font);
+
+  return 0;
+}
+
+int LCDSetFontSize(int fontsize)
+{
+  tft.setTextSize(fontsize);
+
+  return 0;
+}
+
+int LCDSetMode(int mode)
+{
+  return -1;
+}
+
+int LCDMenu(char *st1, char *st2, char *st3, char *st4)
+{
+  return -1;
+}
+
+int LCDMenuI(int pos, char *string, COLOR fg, COLOR bg)
+{
+  return -1;
+}
+
+int LCDGetSize(int *x, int *y)
+{
+  if (!x || !y)
+    return -1;
+
+  *x = LCD_WIDTH;
+  *y = LCD_HEIGHT;
+
+  return 0;
+}
+
+int LCDPixel(int x, int y, COLOR col)
+{
+  rgb565 fg_hue = tft.color24to16(col);
+  tft.drawPixel(x, y, col);
+
+  return 0;
+}
+
+COLOR LCDGetPixel (int x, int y)
+{
+  rgb565 col = tft.readPixel(x, y);
+  return tft.color16to24(col);
+}
+
+int LCDLine(int x1, int y1, int x2, int y2, COLOR col)
+{
+  rgb565 hue = tft.color24to16(col);
+
+  if (x1 - x2 == 0)
+    if (y1 < y2)
+      tft.drawFastVLine(x1, y1, y2-y1, hue);
+    else
+      tft.drawFastVLine(x1, y2, y1-y2, hue);
+  else if (y1 - y2 == 0)
+    if (x1 < x2)
+      tft.drawFastHLine(x1, y1, x2-x1, hue);
+    else
+      tft.drawFastHLine(x2, y1, x1-x2, hue);
+  else
+    tft.drawLine(x1, y1, x2, y2, hue);
+ 
+  return 0;
+}
+
+int LCDArea(int x1, int y1, int x2, int y2, COLOR col, int fill)
+{
+  return 0;
 }

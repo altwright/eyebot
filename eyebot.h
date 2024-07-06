@@ -2,6 +2,7 @@
 #define EYEBOT_H
 
 #include <stdint.h>
+#include <stdarg.h>
 
 ////////////////
 //Core Functions
@@ -98,7 +99,7 @@ bool LCDDrawImage(int xpos, int ypos, int img_width, int img_height, const grays
 
 bool LCDRefresh();
 
-bool LCDClear();
+//bool LCDClear();
 
 bool LCDSetCursor(int x, int y);
 
@@ -108,7 +109,7 @@ bool LCDSetFont(int font);
 
 bool LCDSetFontColor(rgb fg, rgb bg = 0);
 
-bool LCDSetFontSize(int size);
+//bool LCDSetFontSize(int size);
 
 bool LCDPrint(const char *str);
 
@@ -116,7 +117,7 @@ bool LCDPrintln(const char *str);
 
 bool LCDPrintAt(int x, int y, const char *str);
 
-bool LCDGetSize(int *lcd_width, int *lcd_height);
+//bool LCDGetSize(int *lcd_width, int *lcd_height);
 
 bool LCDSetPixel(int x, int y, rgb hue);
 
@@ -228,6 +229,42 @@ bool PSDGet(int *dist);
 
 // Read raw value from distance sensor
 bool PSDGetRaw(int *val);                         
+
+/////////////////
+//Old ROBIOS API
+/////////////////
+
+typedef uint32_t COLOR;
+
+int LCDPrintf(const char *format, ...);
+
+int LCDSetPrintf(int row, int column, const char *format, ...);
+
+int LCDClear();
+
+int LCDSetPos(int row, int column);
+
+int LCDGetPos(int *row, int *column);
+
+int LCDSetColor(COLOR fg, COLOR bg);
+
+int LCDSetFont(int font, int variation);
+
+int LCDSetFontSize(int fontsize);
+
+int LCDSetMode(int mode);
+
+int LCDMenu(char *st1, char *st2, char *st3, char *st4);
+
+int LCDMenuI(int pos, char *string, COLOR fg, COLOR bg);
+
+int LCDGetSize(int *x, int *y); 
+
+int LCDPixel(int x, int y, COLOR col);
+
+int LCDLine(int x1, int y1, int x2, int y2, COLOR col);
+
+int LCDArea(int x1, int y1, int x2, int y2, COLOR col, int fill);
 
 #endif
 

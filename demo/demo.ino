@@ -357,23 +357,23 @@ void DemoDriveToColor()
 
         CAMGetImage(img);
 
-        // int sum_r = 0, sum_g = 0,  sum_b = 0, num_pixels = 0;
-        // for (int y = QQVGA_HEIGHT/2 - 1; y <= QQVGA_HEIGHT/2 + 1; y++)
-        // {
-        //   for (int x = QQVGA_WIDTH/2 - 1; x <= QQVGA_WIDTH/2 + 1; x++)
-        //   {
-        //     byte r, g, b;
-        //     IPGetRGB(img[y*QQVGA_WIDTH + x], &r, &g, &b);
-        //     sum_r += r;
-        //     sum_g += g;
-        //     sum_b += b;
+        int sum_r = 0, sum_g = 0,  sum_b = 0, num_pixels = 0;
+        for (int y = QQVGA_HEIGHT/2 - 1; y <= QQVGA_HEIGHT/2 + 1; y++)
+        {
+          for (int x = QQVGA_WIDTH/2 - 1; x <= QQVGA_WIDTH/2 + 1; x++)
+          {
+            byte r, g, b;
+            IPGetRGB(img[y*QQVGA_WIDTH + x], &r, &g, &b);
+            sum_r += r;
+            sum_g += g;
+            sum_b += b;
 
-        //     num_pixels++;
-        //   }
-        // }
+            num_pixels++;
+          }
+        }
 
-        rgb sampled_pixel = img[QQVGA_HEIGHT/2*QQVGA_WIDTH + QQVGA_WIDTH/2];
-        // IPSetRGB(sum_r / num_pixels, sum_g / num_pixels, sum_b / num_pixels, &sampled_pixel);
+        rgb sampled_pixel;// = img[QQVGA_HEIGHT/2*QQVGA_WIDTH + QQVGA_WIDTH/2];
+        IPSetRGB(sum_r / num_pixels, sum_g / num_pixels, sum_b / num_pixels, &sampled_pixel);
 
         // Sampled Colour
         LCDDrawRect(5, 125, VARIABLE_BUTTON_WIDTH_PX, VARIABLE_BUTTON_HEIGHT_PX, sampled_pixel);
@@ -608,9 +608,9 @@ void DemoDriveToColor()
             if (dist > MIN_DIST)
             {
               if (hori_hist_max_idx <= QQVGA_WIDTH / 3)
-                DRVSetSpeed(0, ang_speed);
-              else if (hori_hist_max_idx >= 2 * QQVGA_WIDTH / 3)
                 DRVSetSpeed(0, -1*ang_speed);
+              else if (hori_hist_max_idx >= 2 * QQVGA_WIDTH / 3)
+                DRVSetSpeed(0, ang_speed);
               else
                 phase = D2C_PHASE_NAVIGATE;
             }
