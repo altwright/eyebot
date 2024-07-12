@@ -129,8 +129,20 @@ void loop() {
   camera_fb_t *fb = esp_camera_fb_get();
   uint8_t *img_bytes = fb->buf;
 
-  for (int i = 0; i < QQVGA_RGB565_BUFFER_SIZE; i++)
-    dma_bytes[i] = img_bytes[i];
+  uint16_t *img = (uint16_t*)img_bytes;
+
+  for (int y = 0; y < QQVGA_HEIGHT; y++)
+  {
+    for (int x = 0; x < QQVGA_WIDTH; x++)
+    {
+      uint16_t *pixel = img + y*QQVGA_WIDTH + x;
+      uint16_t lower = (*pixel & 0xFF00) >> 8;
+      *pixel <<= 8;
+      *pixel |= lower;
+    }
+  }
+
+  memcpy(dma_bytes, img_bytes, QQVGA_RGB565_BUFFER_SIZE);
   
   for (int i = 0; i < NUM_TX_SEGMENTS; i++)
   {

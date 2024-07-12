@@ -674,7 +674,7 @@ int CAMGet(BYTE *buf)
 
   for (int i = 0; i < QQVGA_WIDTH*QQVGA_HEIGHT; i++)
   {
-    rgb565SwapEndianess(&pixels[i]);
+    //rgb565SwapEndianess(&pixels[i]);
     img[i] = rgb565To888(pixels[i]);
   }
 
@@ -705,7 +705,7 @@ int CAMGetGray(BYTE *buf)
 
   for (int i = 0; i < QQVGA_WIDTH*QQVGA_HEIGHT; i++)
   {
-    rgb565SwapEndianess(&pixels[i]);
+    //rgb565SwapEndianess(&pixels[i]);
     COLOR col = rgb565To888(pixels[i]);
 
     BYTE r, g, b;
