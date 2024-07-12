@@ -14,6 +14,9 @@ static BYTE gray_img[QQVGA_PIXELS];
 static int gLCDWidth, gLCDHeight;
 
 void setup() {
+  Serial.begin(9600);
+  while(!Serial);
+
   // put your setup code here, to run once:
   int err;
   if (err = EYEBOTInit())

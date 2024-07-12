@@ -1,6 +1,8 @@
 #include <driver/spi_slave.h>
 #include <esp_camera.h>
 #include <esp_heap_caps.h>
+#include <JPEGENC.h>
+#include <Arduino.h>
 
 // START Pin definition for CAMERA_MODEL_AI_THINKER
 #define PWDN_GPIO_NUM     32
@@ -34,6 +36,7 @@
 #define NUM_TX_SEGMENTS 8
 
 uint8_t *dma_bytes;
+JPEGENC jpgenc;
 
 //Called after a transaction is queued and ready for pickup by master.
 void my_post_setup_cb(spi_slave_transaction_t *trans)
@@ -49,6 +52,8 @@ void my_post_trans_cb(spi_slave_transaction_t *trans)
 
 void setup() {
   Serial.end();
+  Serial.begin(115200);
+  while (!Serial);
 
   //Configuration for the SPI bus
   spi_bus_config_t buscfg = {
@@ -104,7 +109,7 @@ void setup() {
   config.pixel_format = PIXFORMAT_RGB565; //YUV422,GRAYSCALE,RGB565,JPEG
   config.frame_size = FRAMESIZE_QQVGA;
   config.fb_count = 1;
-  config.jpeg_quality = 0;
+  config.jpeg_quality = 63;
 
   ret = esp_camera_init(&config);
   if (ret != ESP_OK) {
@@ -121,11 +126,12 @@ void setup() {
   sensor->set_colorbar(sensor, 0);       // 0 = disable , 1 = enable
 
   dma_bytes = (uint8_t*)heap_caps_aligned_alloc(sizeof(uint32_t), QQVGA_RGB565_BUFFER_SIZE, MALLOC_CAP_DMA);
-  if(!dma_bytes)
-    Serial.printf("Failed to allocate DMA capable memory\n");
+  assert(dma_bytes);
 }
 
 void loop() {
+  JPEGENCODE enc;
+
   camera_fb_t *fb = esp_camera_fb_get();
   uint8_t *img_bytes = fb->buf;
 
@@ -142,18 +148,40 @@ void loop() {
     }
   }
 
-  memcpy(dma_bytes, img_bytes, QQVGA_RGB565_BUFFER_SIZE);
-  
-  for (int i = 0; i < NUM_TX_SEGMENTS; i++)
-  {
-    spi_slave_transaction_t t = {};
-    t.length = MAX_TX_SEGMENT_SIZE * 8;
-    t.tx_buffer = dma_bytes + i*MAX_TX_SEGMENT_SIZE;
-    t.rx_buffer = NULL;
-
-    esp_err_t err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
-    assert(err == ESP_OK);
-  }
+  int err_no;
+  err_no = jpgenc.open(dma_bytes, QQVGA_RGB565_BUFFER_SIZE);
+  assert(!err_no);
+  err_no = jpgenc.encodeBegin(&enc, QQVGA_WIDTH, QQVGA_HEIGHT, JPEGE_PIXEL_RGB565, JPEGE_SUBSAMPLE_444, JPEGE_Q_LOW);
+  assert(!err_no);
+  err_no = jpgenc.addFrame(&enc, img_bytes, QQVGA_WIDTH * sizeof(uint16_t));
+  assert(!err_no);
+  int dataSize = jpgenc.close();
 
   esp_camera_fb_return(fb);
+
+  // spi_slave_transaction_t t = {};
+  // t.length = sizeof(int) * 8;
+  // t.tx_buffer = &dataSize;
+  // t.rx_buffer = NULL;
+  // esp_err_t err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
+  // assert(err == ESP_OK);
+
+  // int num_segs = (dataSize / MAX_TX_SEGMENT_SIZE) + 1;
+
+  // for (int i = 0; i < num_segs - 1; i++)
+  // {
+  //   t = {};
+  //   t.length = MAX_TX_SEGMENT_SIZE * 8;
+  //   t.tx_buffer = dma_bytes + i*MAX_TX_SEGMENT_SIZE;
+  //   t.rx_buffer = NULL;
+  //   err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
+  //   assert(err == ESP_OK);
+  // }
+
+  spi_slave_transaction_t t = {};
+  t.length = MAX_TX_SEGMENT_SIZE * 8;
+  t.tx_buffer = dma_bytes;
+  t.rx_buffer = NULL;
+  esp_err_t err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
+  assert(err == ESP_OK);
 }

@@ -7,6 +7,8 @@
 #include <TFT_eSPI.h>
 #include <TouchLib.h>
 #include <Wire.h>
+using namespace fs;
+#include <JPEGDEC.h>
 
 //Camera Pins
 #define PIN_SPI_MISO 43
@@ -107,6 +109,8 @@ static input_callback pTouchCB = NULL;
 
 static int gImgXStart, gImgYStart;
 
+static JPEGDEC jpgdec;
+
 static RGB565 rgb888To565(COLOR col)
 {
   return gTFT.color24to16(col);
@@ -157,6 +161,26 @@ static void rgb565SwapEndianess(RGB565 *hue)
   uint16_t lower = (*hue & 0xFF00) >> 8;
   *hue <<= 8;
   *hue |= lower;
+}
+
+int jpegDecodeCB(JPEGDRAW *pDraw)
+{
+  COLOR *imgbuf = (COLOR*)pDraw->pUser;
+
+  int ystart = pDraw->y;
+  int xstart = pDraw->x;
+  int height = pDraw->iHeight;
+  int width = pDraw->iWidth;
+  int clipped_width = pDraw->iWidthUsed;
+  RGB565 *pixels = pDraw->pPixels;
+
+  for (int y = 0; y < height; y++)
+  {
+    for (int x = 0; x < width; x++)
+      imgbuf[(ystart + y)*QQVGA_WIDTH + (xstart + x)] = rgb565To888(pixels[y*clipped_width + x]);
+  } 
+
+  return 1; // continue decode
 }
 
 static bool setMotorKillTimer(u64 time_ms)
@@ -654,28 +678,50 @@ int CAMGet(BYTE *buf)
   if (!buf)
     return -1;
 
-  BYTE *rx_buf = (BYTE*)gLCDBuffer;
+  // int dataSize = -1;
 
-  for (int i = 0; i < CAM_NUM_IMAGE_SEGMENTS; i++)
+  // spi_transaction_t t = {};
+  // t.length = sizeof(int)*8;//bit length
+  // t.tx_buffer = NULL;
+  // t.rx_buffer = &dataSize;
+
+  // while (digitalRead(PIN_CAM_SIGNAL));
+
+  // esp_err_t err = spi_device_transmit(gCamSPIHandle, &t);
+  // assert(err == ESP_OK);
+
+  // int num_segs = (dataSize / MAX_RX_SEGMENT_SIZE) + 1;
+
+  uint8_t *rx_buf = (uint8_t*)gLCDBuffer;
+
+  // for (int i = 0; i < num_segs - 1; i++)
+  // {
+  //   t = {};
+  //   t.length = MAX_RX_SEGMENT_SIZE * 8;
+  //   t.tx_buffer = NULL;
+  //   t.rx_buffer = rx_buf + i*MAX_RX_SEGMENT_SIZE;
+  //   while (digitalRead(PIN_CAM_SIGNAL));
+  //   err = spi_device_transmit(gCamSPIHandle, &t);
+  //   assert(err == ESP_OK);
+  // }
+
+  spi_transaction_t t = {};
+  t.length = MAX_RX_SEGMENT_SIZE * 8;
+  t.tx_buffer = NULL;
+  t.rx_buffer = rx_buf;
+  while (digitalRead(PIN_CAM_SIGNAL));
+  esp_err_t err = spi_device_transmit(gCamSPIHandle, &t);
+  assert(err == ESP_OK);
+
+  rx_buf[0] = 0xFF;
+
+  jpgdec.openRAM(rx_buf, MAX_RX_SEGMENT_SIZE, jpegDecodeCB);
+  jpgdec.setUserPointer((void*)buf);
+  if (!jpgdec.decode(0, 0, 0))
   {
-    spi_transaction_t t = {};
-    t.length = MAX_RX_SEGMENT_SIZE*8;//bit length
-    t.tx_buffer = NULL;
-    t.rx_buffer = rx_buf + i*MAX_RX_SEGMENT_SIZE;
-
-    while (digitalRead(PIN_CAM_SIGNAL));
-
-    esp_err_t err = spi_device_transmit(gCamSPIHandle, &t);
-    assert(err == ESP_OK);
-  }
-
-  RGB565 *pixels = (RGB565*)rx_buf;
-  COLOR *img = (COLOR*)buf;
-
-  for (int i = 0; i < QQVGA_WIDTH*QQVGA_HEIGHT; i++)
-  {
-    //rgb565SwapEndianess(&pixels[i]);
-    img[i] = rgb565To888(pixels[i]);
+    COLOR *img = (COLOR*)buf;
+    for (int i = 0; i < QQVGA_PIXELS; i++)
+      img[i] = RED;
   }
 
   return 0;
