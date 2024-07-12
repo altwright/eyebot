@@ -4,267 +4,468 @@
 #include <stdint.h>
 #include <stdarg.h>
 
-////////////////
-//Core Functions
-////////////////
+typedef uint32_t COLOR;
+typedef uint8_t BYTE;
 
-#define LCD_WIDTH 170
-#define LCD_HEIGHT 320
-
-//Must be called at setup()
-bool EYEBOTInit(); 
-
-///////////////////
-//Camera Functions
-///////////////////
-
-#define QQVGA_WIDTH 160
-#define QQVGA_HEIGHT 120
-
-typedef uint8_t byte; 
-typedef byte grayscale;
-typedef uint32_t rgb;
-
-typedef struct {
-  byte hue;
-  byte saturation;
-  byte intensity;
-} __attribute__((aligned(4))) hsi;
-
-// img_buf must be of length at least QQVGA_WIDTH*QQVGA_HEIGHT in size
-bool CAMGetImage(rgb qqvga_buf[]);                
-
-/////////////////////////////
-//Image Processing Functions
-/////////////////////////////
-
-bool IPGetRGB(rgb col, byte *r, byte *g, byte *b);
-
-bool IPSetRGB(byte r, byte g, byte b, rgb *col);
-
-bool IPRGBToGrayscale(rgb col, grayscale *gray);
-
-bool IPRGBToGrayscale(rgb col, rgb *gray);
-
-//Converts a RGB888 colour image to 8-bit grayscale
-bool IPRGBToGrayscale(int img_width, int img_height, const rgb col_img[], grayscale gray_img[]);
-
-bool IPRGBToGrayscale(int img_width, int img_height, const rgb col_img[], rgb gray_img[]);
-
-bool IPGrayscaleToRGB(grayscale gray, rgb *col);
-
-bool IPGrayscaleToRGB(int img_width, int img_height, const grayscale gray_img[], rgb col_img[]);
-
-// Transform RGB pixel to HSI
-bool IPRGBToHSI(rgb col, hsi *value);         
-
-bool IPRGBToHSI(int img_width, int img_height, const rgb img[], hsi values[]);
-
-// Laplace edge detection on gray image
-bool IPLaplace(int img_width, int img_height, const grayscale *in, grayscale *out);
-
-// Sobel edge detection on gray image
-bool IPSobel(int img_width, int img_height, const grayscale *in, grayscale *out);
-
-// intensity_threshold: 0-254
-bool IPOverlay(int width, int height, int intensity_threshold, const rgb bg[], const rgb fg[], rgb out[]);
-
-// intensity_threshold: 0-254
-bool IPOverlay(int width, int height, int intensity_threshold, rgb overlay_color, const rgb bg[], const grayscale fg[], rgb out[]);
-
-// intensity_threshold: 0-254
-bool IPOverlay(int width, int height, int intensity_threshold, rgb overlay_color, const grayscale bg[], const grayscale fg[], rgb out[]);
-
-// intensity_threshold: 0-254
-bool IPOverlay(int width, int height, int intensity_threshold, const grayscale bg[], const rgb fg[], rgb out[]);
-
-////////////////
-//LCD Functions
-////////////////
-
-extern const rgb RED;
-extern const rgb GREEN;
-extern const rgb BLUE;
-extern const rgb BLACK;
-extern const rgb WHITE;
-extern const rgb YELLOW;
-extern const rgb MAGENTA;
-extern const rgb CYAN;
-
-//Push RGB888 image to LCD buffer.
-bool LCDDrawImage(int xpos, int ypos, int img_width, int img_height, const rgb img[]);
-
-//Push 8-bit grayscale image to LCD buffer.
-bool LCDDrawImage(int xpos, int ypos, int img_width, int img_height, const grayscale img[]);
-
-bool LCDRefresh();
-
-//bool LCDClear();
-
-bool LCDSetCursor(int x, int y);
-
-bool LCDGetCursor(int *x, int *y);
-
-bool LCDSetFont(int font);
-
-bool LCDSetFontColor(rgb fg, rgb bg = 0);
-
-//bool LCDSetFontSize(int size);
-
-bool LCDPrint(const char *str);
-
-bool LCDPrintln(const char *str);
-
-bool LCDPrintAt(int x, int y, const char *str);
-
-//bool LCDGetSize(int *lcd_width, int *lcd_height);
-
-bool LCDSetPixel(int x, int y, rgb hue);
-
-bool LCDGetPixel(int x, int y, rgb *hue);
-
-bool LCDDrawLine(int xs, int ys, int xe, int ye, rgb hue);
-
-bool LCDDrawRect(int x, int y, int w, int h, rgb hue, bool fill = true);
-
-bool LCDDrawCircle(int x, int y, int radius, rgb hue, bool fill = true);
-
-///////////////////
-// Input Functions
-///////////////////
-
-enum button {
-  LEFT_BUTTON,
-  RIGHT_BUTTON
+//Fonts
+enum {
+  HELVETICA, 
+  TIMES, 
+  COURIER
 };
 
-typedef void (*input_callback) ();
+//Font variations
+enum {
+  NORMAL,
+  BOLD
+};
 
-//Non-blocking
-bool INReadButton(button b, bool *pressed);
+//LCD Modes
+enum {
+  LCD_BGCOL_TRANSPARENT, 
+  LCD_BGCOL_NOTRANSPARENT, 
+  LCD_BGCOL_INVERSE, 
+  LCD_BGCOL_NOINVERSE, 
+  LCD_FGCOL_INVERSE,
+  LCD_FGCOL_NOINVERSE, 
+  LCD_AUTOREFRESH, 
+  LCD_NOAUTOREFRESH, 
+  LCD_SCROLLING, 
+  LCD_NOSCROLLING, 
+  LCD_LINEFEED,
+  LCD_NOLINEFEED, 
+  LCD_SHOWMENU, 
+  LCD_HIDEMENU, 
+  LCD_LISTMENU, 
+  LCD_CLASSICMENU, 
+  LCD_FB_ROTATE, 
+  LCD_FB_NOROTATION
+};
 
-//Blocking
-bool INWaitForButtonPress(button b);
+const COLOR RED = 0xFF0000, 
+            GREEN = 0x00FF00, 
+            BLUE = 0x0000FF, 
+            WHITE = 0xFFFFFF, 
+            GRAY = 0x808080, 
+            BLACK = 0x000000, 
+            ORANGE = 0xFF7C00, 
+            SILVER = 0xE0E0E0, 
+            LIGHTGRAY = 0xBFBFBF, 
+            DARKGRAY = 0x515151, 
+            NAVY = 0x000E64, 
+            CYAN = 0x00FFFF, 
+            TEAL = 0x008080, 
+            MAGENTA = 0xFF00FF, 
+            PURPLE = 0x800080, 
+            MAROON = 0x800000, 
+            YELLOW = 0xFFFF00, 
+            OLIVE = 0x808000;
 
-//Blocking
-bool INWaitForButtonRelease(button b);
+//Must be called at setup()
+int EYEBOTInit(); 
 
-/**
- * Triggers whenever the button's state changes, both rising and falling.
- * 
- * Excerpt taken from https://www.arduino.cc/reference/en/language/functions/external-interrupts/attachinterrupt/:
- * 
- * "Generally, an ISR should be as short and fast as possible. If your sketch uses multiple ISRs, 
- * only one can run at a time, other interrupts will be executed after the current one finishes 
- * in an order that depends on the priority they have. millis() relies on interrupts to count, so 
- * it will never increment inside an ISR. Since delay() requires interrupts to work, it will not 
- * work if called inside an ISR. micros() works initially but will start behaving erratically after 
- * 1-2 ms. delayMicroseconds() does not use any counter, so it will work as normal.
- * Typically global variables are used to pass data between an ISR and the main program. 
- * 
- * To make sure variables shared between an ISR and the main program are updated correctly, 
- * declare them as volatile."
-*/
-bool INSetButtonCallback(button b, input_callback cb);
-
-bool INClearButtonCallback(button b);
-
-bool INReadTouch(int *x, int *y);
-
-bool INSetTouchCallback(input_callback cb);
-
-bool INClearTouchCallback();
-
-//////////////////////////
-//Motor-Driving Functions
-//////////////////////////
-
-//[-255, 255], applied to the PWM signal for each motor.
-bool DRVSetMotorOffsets(int left_offset, int right_offset);
-
-//[0, 340] mm/s
-bool DRVSetMaxLinearSpeed(int max_lin_speed);
-
-//[0, 180] degrees/s
-bool DRVSetMaxAngularSpeed(int max_ang_speed);
-
-// Set fixed linear speed  [mm/s] and angular speed [degrees/s].
-bool DRVSetSpeed(int lin_speed, int ang_speed);     
-
-// Set eyebot position to x, y [mm] and forward-facing angle (negative for counter-clockwise) [degrees]
-bool DRVSetPosition(int x, int y, int angle);       
-
-// Get estimate of eyebot position as x and y [mm], and forward-facing angle (negative for counter-clockwise) [degrees]
-bool DRVGetPosition(int *x, int *y, int *angle);    
-
-// Drive straight distance (negative for reverse) [mm] at speed > 0 [mm/s].
-bool DRVStraight(int dist, int speed);        
-
-// Turn on spot angle (negative for anti-clockwise) [degrees] at speed > 0 [degrees/s].
-bool DRVTurn(int angle, int speed);           
-
-// Drive curve for distance (negative for reverse) [mm] at linear speed > 0 [mm/s]. 
-// Transition to final orienation angle (negative for anti-clockwise) [degrees].
-bool DRVCurve(int dist, int angle, int lin_speed);
-
-// Drive dx [mm] right (negative for left) and dy [mm] forward (negative for reverse), 
-// speed > 0 [mm/s]. |y| >= |x|, y != 0.
-bool DRVGoTo(int dx, int dy, int speed);     
-
-// Return remaining drive distance of current drive op in [mm]. Returns false if there is no current drive op.
-bool DRVRemaining(int *dist);                             
-
-// Returns false if drive operation is not finished
-bool DRVDone();                               
-
-// Block until drive operation has finished
-bool DRVWait();                               
-
-/////////////////////////////////////////////
-// Position Sensitive Device (PSD) Functions
-/////////////////////////////////////////////
-
-// Read distance value in mm (20-400) from distance sensor.
-bool PSDGet(int *dist);
-
-// Read raw value from distance sensor
-bool PSDGetRaw(int *val);                         
-
-/////////////////
-//Old ROBIOS API
-/////////////////
-
-typedef uint32_t COLOR;
-
+// Print string and arguments on LCD
 int LCDPrintf(const char *format, ...);
 
+// Printf from given position
 int LCDSetPrintf(int row, int column, const char *format, ...);
 
+// Clear the LCD display and display buffers
 int LCDClear();
 
+// Set cursor position in pixels for subsequent printf
 int LCDSetPos(int row, int column);
 
+// Read current cursor position
 int LCDGetPos(int *row, int *column);
 
-int LCDSetColor(COLOR fg, COLOR bg);
+// Set color for subsequent printf
+int LCDSetColor(COLOR fg = WHITE, COLOR bg = BLACK);
 
+// Set font for subsequent print operation
 int LCDSetFont(int font, int variation);
 
+// Set font-size (7..18) for subsequent print operation
 int LCDSetFontSize(int fontsize);
 
+// Set LCD Mode (0=default)
 int LCDSetMode(int mode);
 
+// Set menu entries for soft buttons
 int LCDMenu(char *st1, char *st2, char *st3, char *st4);
 
+// Set menu for i-th entry with color [1..4]
 int LCDMenuI(int pos, char *string, COLOR fg, COLOR bg);
 
+// Get LCD resolution in pixels
 int LCDGetSize(int *x, int *y); 
 
+// Set one pixel on LCD
 int LCDPixel(int x, int y, COLOR col);
 
+// Read pixel value from LCD
+COLOR LCDGetPixel(int x, int y);
+
+// Draw line
 int LCDLine(int x1, int y1, int x2, int y2, COLOR col);
 
-int LCDArea(int x1, int y1, int x2, int y2, COLOR col, int fill);
+// Draw filled/hollow rectangle
+int LCDArea(int x1, int y1, int x2, int y2, COLOR col, int fill = 1);
+
+// Draw filled/hollow circle
+int LCDCircle(int x1, int y1, int radius, COLOR col, int fill = 1);
+
+// Define image type for LCD (default QQVGA; 0,0; full)
+int LCDImageSize(int t);
+
+// Define image start position and size (default 0,0; max_x, max_y)
+int LCDImageStart(int x, int y, int xs, int ys);
+
+// Print color image at screen start pos. and size
+int LCDImage(BYTE *img);
+
+// Print gray image [0..255] black..white
+int LCDImageGray(BYTE *g);
+
+// Print binary image [0..1] black/white
+int LCDImageBinary(BYTE *b);
+
+// Refresh LCD output
+int LCDRefresh(void);
+
+enum {
+  NOKEY = 0,
+  KEY1 = 1 << 0,
+  KEY2 = 1 << 1,
+  KEY3 = 1 << 2,
+  KEY4 = 1 << 3,
+  ANYKEY = ~0
+};
+
+// Blocking read (and wait) for key press (returns KEY1..KEY4)
+int KEYGet(void);            
+
+// Non-blocking read of key press (returns NOKEY=0 if no key)
+int KEYRead(void);           
+
+// Wait until specified key has been pressed (use ANYKEY for any key)
+int KEYWait(int key);        
+
+// Blocking read for touch at any position, returns coordinates
+int KEYGetXY (int *x, int *y);  
+
+// Non-blocking read for touch at any position, returns coordinates
+int KEYReadXY(int *x, int *y);  
+
+typedef BYTE QQVGAcol [120][160][sizeof(COLOR)];    
+typedef BYTE QVGAcol [240][320][sizeof(COLOR)];    
+typedef BYTE VGAcol [480][640][sizeof(COLOR)];    
+typedef BYTE CAM1MPcol [730][1296][sizeof(COLOR)];    
+typedef BYTE CAMHDcol [1080][1920][sizeof(COLOR)];    
+typedef BYTE CAM5MPcol [1944][2592][sizeof(COLOR)];    
+typedef BYTE QQVGAgray [120][160];
+typedef BYTE QVGAgray [240][320];
+typedef BYTE VGAgray [480][640];
+typedef BYTE CAM1MPgray [730][1296];
+typedef BYTE CAMHDgray [1080][1920];
+typedef BYTE CAM5MPgray [1944][2592];
+
+extern int CAMWIDTH; 
+extern int CAMHEIGHT;
+extern int CAMPIXELS;
+extern int CAMSIZE;
+
+#define QQVGA_PIXELS (120*160)
+#define QVGA_PIXELS (240*320)
+#define VGA_PIXELS (480*640)
+#define CAM1MP_PIXELS (730*1296)
+#define CAMHD_PIXELS (1080*1920)
+#define CAM5MP_PIXELS (1944*2592)
+#define QQVGA_SIZE (QQVGA_PIXELS * sizeof(COLOR))
+#define QVGA_SIZE (QVGA_SIZE * sizeof(COLOR))
+#define VGA_SIZE (VGA_PIXELS * sizeof(COLOR))
+#define CAM1MP_SIZE (CAM1MP_PIXELS * sizeof(COLOR))
+#define CAMHD_SIZE (CAMHD_PIXELS * sizeof(COLOR))
+#define CAM5MP_SIZE (CAM5MP_PIXELS * sizeof(COLOR))
+
+// Change camera resolution (will also set IP resolution)
+int CAMInit(int resolution);    
+
+// Stops camera stream
+int CAMRelease(void);           
+
+// Read one color camera image
+int CAMGet(BYTE *buf);          
+
+// Read gray scale camera image
+int CAMGetGray(BYTE *buf);      
+
+// Set IP resolution using CAM constants (also automatically set by CAMInit)
+int IPSetSize(int resolution);                                
+
+// Read PNM file, fill/crop if req.; return 3:color, 2:gray, 1:b/w, -1:error
+int IPReadFile(char *filename, BYTE* img);                    
+
+// Write color PNM file
+int IPWriteFile(char *filename, BYTE* img);                   
+
+// Write gray scale PGM file
+int IPWriteFileGray(char *filename, BYTE* gray);              
+
+// Laplace edge detection on gray image
+void IPLaplace(BYTE* grayIn, BYTE* grayOut);                   
+
+// Sobel edge detection on gray image
+void IPSobel(BYTE* grayIn, BYTE* grayOut);                     
+
+// Transfer color to gray
+void IPCol2Gray(BYTE* imgIn, BYTE* grayOut);                   
+
+// Transfer gray to color              
+void IPGray2Col(BYTE* imgIn, BYTE* colOut);                    
+
+// Transform 3*gray to color
+void IPRGB2Col (BYTE* r, BYTE* g, BYTE* b, BYTE* imgOut);      
+
+// Transform RGB image to HSI
+void IPCol2HSI (BYTE* img, BYTE* h, BYTE* s, BYTE* i);         
+
+// Overlay c2 onto c1, all color images
+void IPOverlay(BYTE* c1, BYTE* c2, BYTE* cOut);                
+
+// Overlay gray image g2 onto g1, using col
+void IPOverlayGray(BYTE* g1, BYTE* g2, COLOR col, BYTE* cOut); 
+
+// PIXEL: RGB to color
+COLOR IPPRGB2Col(BYTE r, BYTE g, BYTE b);                       
+
+// PIXEL: color to RGB
+void IPPCol2RGB(COLOR col, BYTE* r, BYTE* g, BYTE* b);         
+
+// PIXEL: RGB to HSI for pixel
+void IPPCol2HSI(COLOR c, BYTE* h, BYTE* s, BYTE* i);           
+
+// PIXEL: Convert RGB to hue (0 for gray values)
+BYTE IPPRGB2Hue(BYTE r, BYTE g, BYTE b);                       
+
+// PIXEL: Convert RGB to hue, sat, int; hue=0 for gray values
+void IPPRGB2HSI(BYTE r, BYTE g, BYTE b, BYTE* h, BYTE* s, BYTE* i); 
+
+// Execute Linux program in background
+char* OSExecute(char* command);
+
+// RoBIOS Version
+int OSVersion(char* buf);
+
+// RoBIOS-IO Board Version
+int OSVersionIO(char* buf);
+
+// Speed in MHz
+int OSMachineSpeed(void);
+
+// Machine type
+int OSMachineType(void);
+
+// Machine name
+int OSMachineName(char* buf);
+
+// Machine ID derived from MAC address
+int OSMachineID(void);
+
+typedef int TIMER;
+
+// Wait for n/1000 sec
+int OSWait(int n);
+
+// Add fct to 1000Hz/scale timer
+TIMER OSAttachTimer(int scale, void (*fct)(void));
+
+// Remove fct from 1000Hz/scale timer
+int OSDetachTimer(TIMER t);
+
+// Get system time (ticks in 1/1000 sec)
+int OSGetTime(int *hrs,int *mins,int *secs,int *ticks); 
+
+// Count in 1/1000 sec since system start
+int OSGetCount(void);
+
+// Init communication (see parameters below), interface number as in HDT file
+int SERInit(int interface, int baud,int handshake); 
+
+// Send single character
+int SERSendChar(int interface, char ch);
+
+// Send string (Null terminated)
+int SERSend(int interface, char *buf);              
+
+// Receive single character
+char SERReceiveChar(int interface);
+
+// Receive String (Null terminated), returns number of chars received
+int SERReceive(int interface, char *buf, int size);
+
+// Flush interface buffers
+int SERFlush(int interface);
+
+// Close Interface
+int SERClose(int interface);
+
+// Play beep sound
+int AUBeep(void);
+
+// Play audio sample in background (mp3 or wave)
+int AUPlay(char* filename);
+
+// Check if AUPlay has finished
+int AUDone(void);
+
+// Return microphone A-to-D sample value
+int AUMicrophone(void);
+
+enum {
+  PSD_FRONT = 1, 
+  PSD_LEFT = 2, 
+  PSD_RIGHT = 3, 
+  PSD_BACK = 4
+};
+
+// Read distance value in mm from PSD sensor [1..6]
+int PSDGet(int psd);
+
+// Read raw value from PSD sensor [1..6]
+int PSDGetRaw(int psd);
+
+// Measure distances in [mm]; default 360Â° and 360 points
+int LIDARGet(int distance[]);
+
+// range [1..360Â°], tilt angle down, number of points
+int LIDARSet(int range, int tilt, int points);  
+
+// Set servo [1..14] position to [1..255] or power down (0)
+int SERVOSet(int servo, int angle);             
+
+// Set servo [1..14] position bypassing HDT
+int SERVOSetRaw (int servo, int angle);
+
+// Set servo [1..14] limits in 1/100 sec
+int SERVORange(int servo, int low, int high);
+
+// Set motor [1..4] speed in percent [-100 ..+100]
+int MOTORDrive(int motor, int speed);
+
+// Set motor [1..4] speed bypassing HDT
+int MOTORDriveRaw(int motor, int speed);
+
+// Set motor [1..4] PID controller values [1..255]
+int MOTORPID(int motor, int p, int i, int d);
+
+// Stop PID control loop
+int MOTORPIDOff(int motor);
+
+// Set controlled motor speed in ticks/100 sec
+int MOTORSpeed(int motor, int ticks);           
+
+// Read quadrature encoder [1..4]
+int ENCODERRead(int quad);
+
+// Set encoder value to 0 [1..4]
+int ENCODERReset(int quad);
+
+// Set PWM offsets per motor [-255...255]
+int VWSetOffsets(int left_offset, int right_offset);
+
+// Set fixed linSpeed  [mm/s] and [degrees/s]
+int VWSetSpeed(int linSpeed, int angSpeed);     
+
+// Read current speeds [mm/s] and [degrees/s]
+int VWGetSpeed(int *linSpeed, int *angSpeed);  
+
+// Set robot position to x, y [mm], phi [degrees]
+int VWSetPosition(int x, int y, int phi);       
+
+// Get robot position as x, y [mm], phi [degrees]
+int VWGetPosition(int *x, int *y, int *phi);    
+
+// Drive straight, dist [mm], lin. speed [mm/s]
+int VWStraight(int dist, int lin_speed);        
+
+// Turn on spot, angle [degrees], ang. speed [degrees/s]
+int VWTurn(int angle, int ang_speed);           
+
+// Drive Curve, dist [mm], angle (orientation change) [degrees], lin. speed [mm/s]
+int VWCurve(int dist, int angle, int lin_speed);
+
+// Drive x[mm] straight and y[mm] left, x>|y|
+int VWDrive(int dx, int dy, int lin_speed);     
+
+// Return remaining drive distance in [mm]
+int VWRemain(void);                             
+
+// Non-blocking check whether drive is finished (1) or not (0)
+int VWDone(void);                               
+
+// Suspend current thread until drive operation has finished
+int VWWait(void);                               
+
+// Returns number of stalled motor [1..2], 3 if both stalled, 0 if none
+int VWStalled(void);                            
+
+// Set IO line [1..16] to i-n/o-ut/I-n pull-up/J-n pull-down
+int DIGITALSetup(int io, char direction);       
+
+// Read and return individual input line [1..16]
+int DIGITALRead(int io);                        
+
+// Read and return all 16 io lines
+int DIGITALReadAll(void);                       
+
+// Write individual output [1..16] to 0 or 1
+int DIGITALWrite(int io, int state);            
+
+// Read analog channel [1..8]
+int ANALOGRead(int channel);                    
+
+// Read analog supply voltage in [0.01 Volt]
+int ANALOGVoltage(void);                        
+
+// Record analog data (e.g. 8 for microphone) at 1kHz (non-blocking)
+int ANALOGRecord(int channel, int iterations);  
+
+// Transfer previously recorded data; returns number of bytes
+int ANALOGTransfer(BYTE* buffer);               
+
+// Blocking read of IRTV command
+int IRTVGet(void);                              
+
+// Non-blocking read, return 0 if nothing
+int IRTVRead(void);                             
+
+// Empty IRTV buffers
+int IRTVFlush(void);                            
+
+// Checks to see if IRTV is activated (1) or off (0)
+int IRTVGetStatus(void);                        
+
+// Start radio communication
+int RADIOInit(void);                            
+
+// Get own radio ID
+int RADIOGetID(void);                           
+
+// Send string (Null terminated) to ID destination
+int RADIOSend(int id, char* buf);               
+
+// Wait for message, then fill in sender ID and data, returns number of chars received
+int RADIOReceive(int *id_no, char* buf, int size); 
+
+// Check if message is waiting: 0 or 1 (non-blocking); -1 if error
+int RADIOCheck(void);                           
+
+// Returns number of robots (incl. self) and list of IDs in network
+int RADIOStatus(int IDlist[]);                  
+
+// Terminate radio communication
+int RADIORelease(void);                         
 
 #endif
 

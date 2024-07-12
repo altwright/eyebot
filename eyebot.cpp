@@ -35,87 +35,168 @@
 
 typedef uint32_t u32;
 typedef uint64_t u64;
-typedef uint16_t rgb565;
+typedef uint16_t RGB565;
+typedef void (*input_callback) ();
 
 #define CAM_NUM_IMAGE_SEGMENTS 8
-#define QQVGA_RGB565_BUFFER_SIZE QQVGA_WIDTH*QQVGA_HEIGHT*sizeof(rgb565)
+#define QQVGA_RGB565_BUFFER_SIZE QQVGA_WIDTH*QQVGA_HEIGHT*sizeof(RGB565)
 
 #define MAX_RX_SEGMENT_SIZE 4800
 
-////////////////
-//Core Functions
-////////////////
+#define MIN(a,b) (((a)<(b))?(a):(b))
+#define MAX(a,b) (((a)>(b))?(a):(b))
 
-static TFT_eSPI tft = TFT_eSPI(LCD_WIDTH, LCD_HEIGHT);
-static spi_device_handle_t cam_spi_handle;
-TouchLib touch(Wire, PIN_IIC_SDA, PIN_IIC_SCL, CTS820_SLAVE_ADDRESS, PIN_TOUCH_RES);
+#define INTENSITY_THRESHOLD 10
 
-static rgb565 lcd_buf[LCD_HEIGHT*LCD_WIDTH];
+#define RAW_DISTANCE_PAIR_COUNT 25
 
-enum drive_op
+#define LCD_WIDTH 170
+#define LCD_HEIGHT 320
+
+#define QQVGA_WIDTH 160
+#define QQVGA_HEIGHT 120
+
+struct RawDistancePair
 {
-  DRV_OP_STRAIGHT,
-  DRV_OP_TURN,
-  DRV_OP_CURVE,
-  DRV_OP_UNDEFINED
+  int raw;
+  int distance;//mm
 };
 
-static volatile drive_op current_drv_op = DRV_OP_UNDEFINED;
+enum vw_op
+{
+  VW_OP_UNDEFINED,
+  VW_OP_STRAIGHT,
+  VW_OP_TURN,
+  VW_OP_CURVE
+};
 
-static timer_group_t timer_group = TIMER_GROUP_0;
-static timer_idx_t motor_timer_idx = TIMER_0;
+int CAMWIDTH = QQVGA_WIDTH; 
+int CAMHEIGHT = QQVGA_HEIGHT;
+int CAMPIXELS = QQVGA_PIXELS;
+int CAMSIZE = QQVGA_PIXELS * sizeof(COLOR);
 
-static int left_motor_pwm_offset;
-static int right_motor_pwm_offset;
-static int left_motor_pwm;
-static int right_motor_pwm ;
+static TFT_eSPI gTFT = TFT_eSPI(LCD_WIDTH, LCD_HEIGHT);
+static spi_device_handle_t gCamSPIHandle;
+TouchLib gTouch(Wire, PIN_IIC_SDA, PIN_IIC_SCL, CTS820_SLAVE_ADDRESS, PIN_TOUCH_RES);
+static bool gTouchEnabled = true;
+
+static RGB565 gLCDBuffer[LCD_HEIGHT*LCD_WIDTH];
+
+static volatile vw_op gCurrentVWOp = VW_OP_UNDEFINED;
+
+static timer_group_t gTimerGroup = TIMER_GROUP_0;
+static timer_idx_t gMotorTimerIdx = TIMER_0;
+
+static int gLeftMotorOffset;
+static int gRightMotorOffset;
+static int gLeftMotorPWM;
+static int gRightMotorPWM ;
 
 // mm/s
-static int max_linear_speed = 340;
+static int MAX_LIN_SPEED = 340;
 // degrees/s
-static int max_angular_speed = 180;
+static int MAX_ANG_SPEED = 180;
 
-static int eyebot_xpos, eyebot_ypos, eyebot_angle;
-static int eyebot_lin_speed, eyebot_ang_speed;
-static unsigned long eyebot_op_total_time, eyebot_op_start_time;
+static int gXPos, gYPos, gAngle;
+static volatile int gLinSpeed, gAngSpeed;
+static unsigned long gOpTotalTime, gOpStartTime;
 
-static bool motor_kill_timer_cb(void *arg)
+static input_callback pLeftButtonCB = NULL;
+static input_callback pRightButtonCB = NULL;
+static input_callback pTouchCB = NULL;
+
+static int gImgXStart, gImgYStart;
+
+static RGB565 rgb888To565(COLOR col)
+{
+  return gTFT.color24to16(col);
+}
+
+static COLOR rgb565To888(RGB565 col)
+{
+  return gTFT.color16to24(col);
+}
+
+static bool motorKillTimerCB(void *arg)
 {
   analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
   analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
   analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
   analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
 
-  current_drv_op = DRV_OP_UNDEFINED;
-  eyebot_lin_speed = 0;
-  eyebot_ang_speed = 0;
+  gCurrentVWOp = VW_OP_UNDEFINED;
+  gLinSpeed = 0;
+  gAngSpeed = 0;
 
   return true;
 }
 
-static input_callback left_button_cb = NULL;
-static input_callback right_button_cb = NULL;
-static input_callback touch_cb = NULL;
-
-static void default_left_button_cb()
+static void defaultLeftButtonCB()
 {
-  if (left_button_cb)
-    left_button_cb();
+  if (pLeftButtonCB)
+    pLeftButtonCB();
 }
 
-static void default_right_button_cb()
+static void defaultRightButtonCB()
 {
-  if (right_button_cb)
-    right_button_cb();
+  if (pRightButtonCB)
+    pRightButtonCB();
 }
 
-static void default_touch_cb()
+static void defaultTouchCB()
 {
-  if (touch_cb)
-    touch_cb();
+  if (pTouchCB)
+    pTouchCB();
 }
 
-bool EYEBOTInit()
+static void rgb565SwapEndianess(RGB565 *hue)
+{
+  if (!hue)
+    return;
+
+  uint16_t lower = (*hue & 0xFF00) >> 8;
+  *hue <<= 8;
+  *hue |= lower;
+}
+
+static bool setMotorKillTimer(u64 time_ms)
+{
+  esp_err_t err;
+  if (err = timer_pause(gTimerGroup, gMotorTimerIdx))
+  {
+    //Serial.printf("Failed to pause timer: %d\n", err);
+    return false;
+  }
+
+  if (err = timer_set_counter_value(gTimerGroup, gMotorTimerIdx, 0))
+  {
+    //Serial.printf("Failed to set timer counter to zero: %d\n", err);
+    return false;
+  }
+
+  //Assumes 2000 increments per s
+  if (err = timer_set_alarm_value(gTimerGroup, gMotorTimerIdx, 2*(u64)time_ms))
+  {
+    //Serial.printf("Failed to set timer alarm value: %d\n", err);
+    return false;
+  }
+
+  if (err = timer_set_alarm(gTimerGroup, gMotorTimerIdx, TIMER_ALARM_EN))
+  {
+    //Serial.printf("Failed to enable timer alarm: %d\n", err);
+    return false;
+  }
+
+  if (err = timer_start(gTimerGroup, gMotorTimerIdx))
+  {
+    //Serial.printf("Failed to start timer: %d\n", err);
+    return false;
+  }
+
+  return true;
+}
+
+int EYEBOTInit()
 {
   /////////////
   //Motor init
@@ -126,9 +207,9 @@ bool EYEBOTInit()
   analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
   analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
 
-  /////////////////////////////////////
-  // Enable being powered by a battery
-  /////////////////////////////////////
+  ////////////////////////////////////////////
+  // Enable being powered from the power rail
+  ////////////////////////////////////////////
 
   //pinMode(PIN_BATTERY_POWER, OUTPUT);
   //digitalWrite(PIN_BATTERY_POWER, HIGH);
@@ -136,8 +217,8 @@ bool EYEBOTInit()
   //////////////////////
   //Initialise T-Display
   //////////////////////
-  tft.init();
-  tft.fillScreen(TFT_BLACK);
+  gTFT.init();
+  gTFT.fillScreen(TFT_BLACK);
   
   ////////////////////////////////////////////////////////////
   //SPI Initialisation for communication with the ESP32-Camera
@@ -173,15 +254,15 @@ bool EYEBOTInit()
   //Initialize the SPI bus and add the ESP32-Camera as a device
   esp_err_t err = spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO);
   assert(err == ESP_OK);
-  err = spi_bus_add_device(SPI2_HOST, &devcfg, &cam_spi_handle);
+  err = spi_bus_add_device(SPI2_HOST, &devcfg, &gCamSPIHandle);
   assert(err == ESP_OK);
   
   ///////////////////////////////
   //Set default button callbacks
   ///////////////////////////////
 
-  attachInterrupt(digitalPinToInterrupt(PIN_LEFT_BUTTON), default_left_button_cb, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(PIN_RIGHT_BUTTON), default_right_button_cb, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(PIN_LEFT_BUTTON), defaultLeftButtonCB, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(PIN_RIGHT_BUTTON), defaultRightButtonCB, CHANGE);
 
   ///////////////////
   //Initialise timer
@@ -195,10 +276,10 @@ bool EYEBOTInit()
   timer_config.auto_reload = TIMER_AUTORELOAD_DIS;
   timer_config.divider = 40000;//Decrements 80 MHz/40000 = 2000 times a second
 
-  err = timer_init(timer_group, motor_timer_idx, &timer_config);
+  err = timer_init(gTimerGroup, gMotorTimerIdx, &timer_config);
   assert(err == ESP_OK);
 
-  err = timer_isr_callback_add(timer_group, motor_timer_idx, motor_kill_timer_cb, NULL, 0);
+  err = timer_isr_callback_add(gTimerGroup, gMotorTimerIdx, motorKillTimerCB, NULL, 0);
   assert(err == ESP_OK);
 
   //////////////////////////
@@ -212,1327 +293,13 @@ bool EYEBOTInit()
   digitalWrite(PIN_TOUCH_RES, HIGH);
   Wire.begin(PIN_IIC_SDA, PIN_IIC_SCL);
 
-  if (!touch.init()) {
-    Serial.println("Touch IC not found");
-  }
+  if (!gTouch.init())
+    gTouchEnabled = false;
 
-  attachInterrupt(digitalPinToInterrupt(PIN_TOUCH_INT), default_touch_cb, FALLING);
+  attachInterrupt(digitalPinToInterrupt(PIN_TOUCH_INT), defaultTouchCB, CHANGE);
 
-  return true;
+  return 0;
 }
-
-///////////////////
-//Camera Functions
-///////////////////
-
-static bool IPSwapEndianess(rgb565 *hue)
-{
-  uint16_t lower = (*hue & 0xFF00) >> 8;
-  *hue <<= 8;
-  *hue |= lower;
-
-  return true;
-}
-
-static bool IP888To565(rgb in_hue, rgb565 *out_hue)
-{
-  *out_hue = tft.color24to16(in_hue);
-
-  return true;
-}
-
-static bool IP565To888(rgb565 in_hue, rgb *out_hue)
-{
-  *out_hue = tft.color16to24(in_hue);
-
-  return true;
-}
-
-bool CAMGetImage(rgb qqvga_buf[])
-{
-  if (!qqvga_buf)
-    return false;
-
-  byte *rx_buf = (byte*)lcd_buf;
-
-  for (int i = 0; i < CAM_NUM_IMAGE_SEGMENTS; i++)
-  {
-    spi_transaction_t t = {};
-    t.length = MAX_RX_SEGMENT_SIZE*8;//bit length
-    t.tx_buffer = NULL;
-    t.rx_buffer = rx_buf + i*MAX_RX_SEGMENT_SIZE;
-
-    while (digitalRead(PIN_CAM_SIGNAL));
-
-    esp_err_t err = spi_device_transmit(cam_spi_handle, &t);
-    assert(err == ESP_OK);
-  }
-
-  rgb565 *cam_buf = (rgb565*)rx_buf;
-
-  for (int i = 0; i < QQVGA_WIDTH*QQVGA_HEIGHT; i++)
-  {
-    IPSwapEndianess(&cam_buf[i]);
-    IP565To888(cam_buf[i], &qqvga_buf[i]);
-  }
-
-  return true;
-}
-
-/////////////////////////////
-//Image Processing Functions
-/////////////////////////////
-
-#define MIN(a,b) (((a)<(b))?(a):(b))
-#define MAX(a,b) (((a)>(b))?(a):(b))
-
-bool IPGetRGB(rgb hue, byte *r, byte *g, byte *b)
-{
-  if (!r || !g || !b)
-    return false;
-
-  *r = (hue >> 16) & 0xFF;
-  *g = (hue >> 8) & 0xFF;
-  *b = (hue) & 0xFF;
-
-  return true;
-}
-
-bool IPSetRGB(byte r, byte g, byte b, rgb *hue)
-{
-  if (!hue)
-    return false;
-
-  rgb565 col = tft.color565(r, g, b);
-  IP565To888(col, hue);
-
-  return true;
-}
-
-bool IPRGBToGrayscale(rgb hue, grayscale *gray)
-{
-  if (!gray)
-    return false;
-
-  byte r, g, b;
-  IPGetRGB(hue, &r, &g, &b);
-
-  *gray = (r + g + b)/3;
-
-  return true;
-}
-
-bool IPRGBToGrayscale(rgb col, rgb *gray)
-{
-  if (!gray)
-    return false;
-
-  grayscale val = 0;
-  IPRGBToGrayscale(col, &val);
-
-  IPGrayscaleToRGB(val, gray);
-
-  return true;
-}
-
-bool IPRGBToGrayscale(int img_width, int img_height, const rgb col_img[], grayscale gray_img[])
-{
-  if (!col_img || !gray_img)
-    return false;
-
-  for (int y = 0; y < img_height; y++)
-  {
-    for (int x = 0; x < img_width; x++)
-    {
-      int i = y*img_width + x;
-
-      IPRGBToGrayscale(col_img[i], &gray_img[i]);
-    }
-  }
-
-  return true;
-}
-
-bool IPRGBToGrayscale(int img_width, int img_height, const rgb col_img[], rgb gray_img[])
-{
-  if (!col_img || !gray_img)
-    return false;
-
-  for (int y = 0; y < img_height; y++)
-  {
-    for (int x = 0; x < img_width; x++)
-    {
-      int i = y*img_width + x;
-
-      IPRGBToGrayscale(col_img[i], &gray_img[i]);
-    }
-  }
-
-  return true;
-}
-
-bool IPGrayscaleToRGB(grayscale gray, rgb *col)
-{
-  if (!col)
-    return false;
-
-  IPSetRGB(gray, gray, gray, col);
-
-  return true;
-}
-
-bool IPGrayscaleToRGB(int img_width, int img_height, const grayscale gray_img[], rgb col_img[])
-{
-  if (!gray_img || !col_img)
-    return false;
-
-  for (int y = 0; y < img_height; y++)
-  {
-    for (int x = 0; x < img_width; x++)
-    {
-      int i = y*img_width + x;
-
-      IPGrayscaleToRGB(gray_img[i], &col_img[i]);
-    }
-  }
-
-  return true;
-}
-
-#define INTENSITY_THRESHOLD 10
-
-// Transform RGB pixel to HSI
-bool IPRGBToHSI(rgb col, hsi *value)
-{
-  if (!value)
-    return false;
-
-  byte r, g, b;
-  IPGetRGB(col, &r, &g, &b);
-
-  byte max   = MAX(r, MAX(g, b));
-  byte min   = MIN(r, MIN(g, b));
-  byte delta = max - min;
-
-  value->intensity = (r + g + b)/3;
-
-  if (value->intensity > 0) 
-    value->saturation = 255 - (255 * min)/(value->intensity);
-  else 
-    value->saturation = 0;
-
-  if ((2*delta > max) && (value->intensity > INTENSITY_THRESHOLD))
-  { 
-    if (r == max) 
-      value->hue =  43 + 42*(g-b)/delta; // +/-42 [  1.. 85]
-    else if (g == max) 
-      value->hue = 128 + 42*(b-r)/delta; // +/-42 [ 86..170]
-    else if (b == max) 
-      value->hue = 213 + 42*(r-g)/delta; // +/-42 [171..255]
-  }
-  else 
-    value->hue = 0; // grayscale, not color
-
-  return true;
-}
-
-bool IPRGBToHSI(int img_width, int img_height, const rgb img[], hsi values[])
-{
-  if (!img || !values)
-    return false;
-
-  for (int y = 0; y < img_height; y++)
-  {
-    for (int x = 0; x < img_width; x++)
-    {
-      int i = y*img_width + x;
-
-      IPRGBToHSI(img[i], &values[i]);
-    }
-  }
-
-  return true;
-}
-
-bool IPLaplace(int img_width, int img_height, const grayscale *in, grayscale *out)
-{
-  if (!in || !out)
-    return false;
-
-  for (int y = 1; y < img_height - 1; y++)
-  {
-    for (int x = 1; x < img_width - 1; x++)
-    {
-      int i = y*img_width + x;
-
-      int delta = abs(4*in[i] - in[i-1] - in[i+1] - in[i-img_width] - in[i+img_width]);
-
-      if (delta > 0xFF) 
-        delta = 0xFF;
-
-      out[i] = (grayscale)delta;
-    }
-  }
-
-  return true;
-}
-
-bool IPSobel(int img_width, int img_height, const grayscale *in, grayscale *out)
-{
-  if (!in || !out)
-    return false;
-
-  memset(out, 0, img_width); // clear first row
-
-  for (int y = 1; y < img_height-1; y++)
-  {
-    for (int x = 1; x < img_width-1; x++)
-    {
-      int i = y*img_width + x;
-
-      int deltaX = 2*in[i+1] + in[i-img_width+1] + in[i+img_width+1] - 2*in[i-1] - in[i-img_width-1] - in[i+img_width-1];
-      int deltaY = in[i-img_width-1] + 2*in[i-img_width] + in[i-img_width+1] - in[i+img_width-1] - 2*in[i+img_width] - in[i+img_width+1];
-
-
-      int grad = (abs(deltaX) + abs(deltaY)) / 3;
-      if (grad > 0xFF) 
-        grad = 0xFF;
-
-      out[i] = (grayscale)grad;
-    }
-  }
-
-  memset(out + (img_height-1)*(img_width), 0, img_width);
-
-  return true;
-}
-
-bool IPOverlay(int width, int height, int intensity_threshold, const rgb bg[], const rgb fg[], rgb out[])
-{
-  if (!bg || !fg || !out)
-    return false;
-
-  intensity_threshold = intensity_threshold < 0 || intensity_threshold >= 255 ? 0 : intensity_threshold;
-
-  for (int y = 0; y < height; y++)
-  {
-    for (int x = 0; x < width; x++)
-    {
-      int i = y*width + x;
-
-      byte r = 0, g = 0, b = 0;
-      IPGetRGB(fg[i], &r, &g, &b);
-
-      int intensity = (r + g + b)/3;
-
-      out[i] = intensity > intensity_threshold ? fg[i] : bg[i];
-    }
-  }
-
-  return true;
-}
-
-bool IPOverlay(int width, int height, int intensity_threshold, rgb overlay_color, const rgb bg[], const grayscale fg[], rgb out[])
-{
-  if (!bg || !fg || !out)
-    return false;
-
-  intensity_threshold = intensity_threshold < 0 || intensity_threshold >= 255 ? 0 : intensity_threshold;
-
-  byte r = 0, g = 0, b = 0;
-  IPGetRGB(overlay_color, &r, &g, &b);
-
-  for (int y = 0; y < height; y++)
-  {
-    for (int x = 0; x < width; x++)
-    {
-      int i = y*width + x;
-
-      if (fg[i] > intensity_threshold)
-      {
-        float intensity = fg[i] / 255.0f;
-        float red = r * intensity;
-        float green = g * intensity;
-        float blue = b * intensity;
-
-        rgb new_overlay_col = 0;
-        IPSetRGB((byte)red, (byte)green, (byte)blue, &new_overlay_col);
-
-        out[i] = new_overlay_col;
-      }
-      else
-      {
-        out[i] = bg[i];
-      }
-    }
-  }
-
-  return true;
-}
-
-bool IPOverlay(int width, int height, int intensity_threshold, rgb overlay_color, const grayscale bg[], const grayscale fg[], rgb out[])
-{
-  if (!bg || !fg || !out)
-    return false;
-
-  intensity_threshold = intensity_threshold < 0 || intensity_threshold >= 255 ? 0 : intensity_threshold;
-
-  byte r = 0, g = 0, b = 0;
-  IPGetRGB(overlay_color, &r, &g, &b);
-
-  for (int y = 0; y < height; y++)
-  {
-    for (int x = 0; x < width; x++)
-    {
-      int i = y*width + x;
-
-      if (fg[i] > intensity_threshold)
-      {
-        float intensity = fg[i] / 255.0f;
-        float red = r * intensity;
-        float green = g * intensity;
-        float blue = b * intensity;
-
-        rgb new_overlay_col = 0;
-        IPSetRGB((byte)red, (byte)green, (byte)blue, &new_overlay_col);
-
-        out[i] = new_overlay_col;
-      }
-      else
-      {
-        IPSetRGB(bg[i], bg[i], bg[i], &out[i]);
-      }
-    }
-  }
-
-  return true;
-}
-
-bool IPOverlay(int width, int height, int intensity_threshold, const grayscale bg[], const rgb fg[], rgb out[])
-{
-  if (!bg || !fg || !out)
-    return false;
-
-  intensity_threshold = intensity_threshold < 0 || intensity_threshold >= 255 ? 0 : intensity_threshold;
-
-  for (int y = 0; y < height; y++)
-  {
-    for (int x = 0; x < width; x++)
-    {
-      int i = y*width + x;
-
-      byte r = 0, g = 0, b = 0;
-      IPGetRGB(fg[i], &r, &g, &b);
-
-      int intensity = (r + g + b)/3;
-      
-      if (intensity > intensity_threshold)
-        out[i] = fg[i];
-      else
-        IPSetRGB(bg[i], bg[i], bg[i], &out[i]);
-    }
-  }
-
-  return true;
-}
-
-////////////////
-//LCD Functions
-////////////////
-
-const rgb RED = 0xFF0000;
-const rgb GREEN = 0x00FF00;
-const rgb BLUE = 0x0000FF;
-const rgb BLACK = 0;
-const rgb WHITE = 0xFFFFFF;
-const rgb YELLOW = 0xFFFF00;
-const rgb MAGENTA = 0xFF00FF;
-const rgb CYAN = 0x00FFFF;
-
-bool LCDDrawImage(int xpos, int ypos, int img_width, int img_height, const rgb img[])
-{
-  if (!img)
-    return false;
-
-  if (img_width < 0 || img_height < 0 || (img_width*img_height) > (LCD_WIDTH*LCD_HEIGHT))
-    return false;
-
-  for (int y = 0; y < img_height; y++)
-  {
-    for (int x = 0; x < img_width; x++)
-    {
-      int i = y*img_width + x;
-
-      IP888To565(img[i], &lcd_buf[i]);
-      IPSwapEndianess(&lcd_buf[i]);
-    }
-  }
-
-  tft.pushRect(xpos, ypos, img_width, img_height, lcd_buf);
-
-  return true;
-}
-
-bool LCDDrawImage(int xpos, int ypos, int img_width, int img_height, const grayscale img[])
-{
-  if (!img)
-    return false;
-
-  if (img_width < 0 || img_height < 0 || (img_width*img_height) > (LCD_WIDTH*LCD_HEIGHT))
-    return false;
-
-  for (int y = 0; y < img_height; y++)
-  {
-    for (int x = 0; x < img_width; x++)
-    {
-      int i = y*img_width + x;
-
-      rgb pix = 0;
-      IPSetRGB(img[i], img[i], img[i], &pix);
-
-      IP888To565(pix, &lcd_buf[i]);
-      IPSwapEndianess(&lcd_buf[i]);
-    }
-  }
-
-  tft.pushRect(xpos, ypos, img_width, img_height, lcd_buf);
-
-  return true;
-}
-
-bool LCDRefresh()
-{
-  return true;
-}
-
-// bool LCDClear()
-// {
-//   tft.fillScreen(TFT_BLACK);
-
-//   return true;
-// }
-
-bool LCDSetCursor(int xpos, int ypos)
-{
-  if (xpos < 0 || ypos < 0 || xpos > LCD_WIDTH || ypos > LCD_HEIGHT)
-    return false;
-
-  tft.setCursor(xpos, ypos);
-
-  return true;
-}
-
-bool LCDGetCursor(int *xpos, int *ypos)
-{
-  if (!xpos || !ypos)
-    return false;
-
-  *xpos = tft.getCursorX();
-  *ypos = tft.getCursorY();
-
-  return true;
-}
-
-bool LCDSetFont(int font)
-{
-  if (font > 0xff)
-    return false;
-  
-  tft.setTextFont(font);
-
-  return true;
-}
-
-bool LCDSetFontColor(rgb fg, rgb bg)
-{
-  rgb565 fg_hue = 0;
-  IP888To565(fg, &fg_hue);
-
-  rgb565 bg_hue = 0;
-  IP888To565(bg, &bg_hue);
-
-  tft.setTextColor(fg_hue, bg_hue);
-
-  return true;
-}
-
-// bool LCDSetFontSize(int size)
-// {
-//   if (size <= 0 || size > 0xFF)
-//     return false;
-
-//   tft.setTextSize(size);
-
-//   return true;
-// }
-
-bool LCDPrint(const char *str)
-{
-  if (!str)
-    return false;
-
-  tft.print(str);
-
-  return true;
-}
-
-bool LCDPrintln(const char *str)
-{
-  if (!str)
-    return false;
-
-  tft.println(str);
-
-  return true;
-}
-
-bool LCDPrintAt(int xpos, int ypos, const char *str)
-{
-  if (!str)
-    return false;
-
-  tft.drawString(str, xpos, ypos);
-
-  return true;
-}
-
-// bool LCDGetSize(int *lcd_width, int *lcd_height)
-// {
-//   if (!lcd_width || !lcd_height)
-//     return false;
-
-//   *lcd_width = LCD_WIDTH;
-//   *lcd_height = LCD_HEIGHT;
-
-//   return true;
-// }
-
-bool LCDSetPixel(int xpos, int ypos, rgb hue)
-{
-  rgb565 col = 0;
-  IP888To565(hue, &col);
-
-  tft.drawPixel(xpos, ypos, col);
-
-  return true;
-}
-
-bool LCDGetPixel(int xpos, int ypos, rgb *hue)
-{
-  if (!hue)
-    return false;
-
-  rgb565 col = tft.readPixel(xpos, ypos);
-  IP565To888(col, hue);
-
-  return true;
-}
-
-bool LCDDrawLine(int xs, int ys, int xe, int ye, rgb hue)
-{
-  rgb565 col = 0;
-  IP888To565(hue, &col);
-
-  if (xs - xe == 0)
-    if (ys < ye)
-      tft.drawFastVLine(xs, ys, ye-ys, col);
-    else
-      tft.drawFastVLine(xs, ye, ys-ye, col);
-  else if (ys - ye == 0)
-    if (xs < xe)
-      tft.drawFastHLine(xs, ys, xe-xs, col);
-    else
-      tft.drawFastHLine(xe, ys, xs-xe, col);
-  else
-    tft.drawLine(xs, ys, xe, ye, col);
-
-  return true;
-}
-
-bool LCDDrawRect(int x, int y, int w, int h, rgb hue, bool fill)
-{
-  rgb565 col = 0;
-  IP888To565(hue, &col);
-
-  if (fill)
-    tft.fillRect(x, y, w, h, col);
-  else
-    tft.drawRect(x, y, w, h, col);
-
-  return true;
-}
-
-bool LCDDrawCircle(int x, int y, int radius, rgb hue, bool fill)
-{
-  rgb565 col = 0;
-  IP888To565(hue, &col);
-
-  if (fill)
-    tft.fillCircle(x, y, radius, col);
-  else 
-    tft.drawCircle(x, y, radius, col);
-  
-  return false;
-}
-
-///////////////////
-// Input Functions
-///////////////////
-
-static int INGetButtonPin(button b)
-{
-  int pin;
-  switch (b)
-  {
-    case LEFT_BUTTON:
-      pin = PIN_LEFT_BUTTON;
-      break;
-    case RIGHT_BUTTON:
-      pin = PIN_RIGHT_BUTTON;
-      break;
-    default: 
-      pin = -1;
-      break;
-  }
-
-  return pin;
-}
-
-bool INReadButton(button b, bool *pressed)
-{
-  if (!pressed)
-    return false;
-
-  int pin = INGetButtonPin(b);
-
-  if (pin < 0)
-    return false;
-
-  if (digitalRead(pin))
-    *pressed = false;
-  else
-    *pressed = true;
-
-  return true;
-}
-
-bool INWaitForButtonPress(button b)
-{
-  int pin = INGetButtonPin(b);
-
-  while (digitalRead(pin));
-
-  return true;
-}
-
-bool INWaitForButtonRelease(button b)
-{
-  int pin = INGetButtonPin(b);
-
-  while (!digitalRead(pin));
-
-  return true;
-}
-
-bool INSetButtonCallback(button b, input_callback cb)
-{
-  if (!cb)
-    return false;
-
-  switch (b)
-  {
-    case LEFT_BUTTON:
-      left_button_cb = cb;
-      break;
-    case RIGHT_BUTTON:
-      right_button_cb = cb;
-      break;
-    default: 
-      break;
-  }
-
-  return true;
-}
-
-bool INClearButtonCallback(button b)
-{
-  switch (b)
-  {
-    case LEFT_BUTTON:
-      left_button_cb = NULL;
-      break;
-    case RIGHT_BUTTON:
-      right_button_cb = NULL;
-      break;
-    default: 
-      break;
-  }
-
-  return true;
-}
-
-
-bool INReadTouch(int *x, int *y)
-{
-  if (touch.read())
-  {
-    TP_Point t = touch.getPoint(0);
-    *x = t.x < LCD_WIDTH ? t.x : -1;
-    *y = t.y < LCD_HEIGHT ? t.y : -1;
-  }
-  else
-  {
-    *x = -1;
-    *y = -1;
-  }
-
-  return true;
-}
-
-bool INSetTouchCallback(input_callback cb)
-{
-  if (!cb)
-    return false;
-  
-  touch_cb = cb;
-
-  return true;
-}
-
-bool INClearTouchCallback()
-{
-  touch_cb = NULL;
-
-  return true;
-}
-
-//////////////////////////
-//Motor-Driving Functions
-//////////////////////////
-
-
-bool DRVSetMotorOffsets(int left_offset, int right_offset)
-{
-  left_motor_pwm_offset = left_offset < -255 || left_offset > 255 ? 0 : left_offset;
-  right_motor_pwm_offset = right_offset < -255 || right_offset > 255 ? 0 : right_offset;
-
-  return true;
-}
-
-bool DRVSetMaxLinearSpeed(int max_speed)
-{
-  max_linear_speed = max_speed < 0 ? 0 : max_speed;
-
-  return true;
-}
-
-bool DRVSetMaxAngularSpeed(int max_speed)
-{
-  max_angular_speed = max_speed < 0 ? 0 : max_speed;
-
-  return true;
-}
-
-bool DRVSetPosition(int x, int y, int angle)
-{
-  eyebot_xpos = x;
-  eyebot_ypos = y;
-  eyebot_angle = angle;
-
-  return false;
-}
-
-bool DRVGetPosition(int *x, int *y, int *angle)
-{
-  if (!x || !y || !angle)
-    return false;
-  
-  unsigned long delta = millis() - eyebot_op_start_time;
-
-  switch (current_drv_op)
-  {
-    case DRV_OP_UNDEFINED:
-    case DRV_OP_STRAIGHT:
-    case DRV_OP_CURVE:
-    {
-      float delta_arc = eyebot_lin_speed * (delta / 1000.0f);
-      float eyebot_angle_rad = eyebot_angle * M_PI / 180.0f;
-      float delta_degrees = eyebot_ang_speed * (delta / 1000.0f);
-
-      int dx = 0, dy = 0;
-      if (eyebot_ang_speed != 0 && delta != 0)
-      {
-        float delta_rad = delta_degrees * M_PI / 180.0f;
-        float radius = delta_arc / delta_rad;
-
-        dy = radius * sinf(eyebot_angle_rad + delta_rad);
-        dx = radius - (radius * cosf(eyebot_angle_rad + delta_rad));
-      }
-      else
-      {
-        dy = delta_arc * cosf(eyebot_angle_rad);
-        dx = delta_arc * sinf(eyebot_angle_rad);
-      }
-
-      *x = eyebot_xpos + dx;
-      *y = eyebot_ypos + dy;
-      *angle = eyebot_angle + delta_degrees;
-
-      break;
-    }
-    case DRV_OP_TURN:
-    {
-      float delta_degrees = eyebot_ang_speed * (delta / 1000.0f);
-
-      *x = eyebot_xpos;
-      *y = eyebot_ypos;
-      *angle = eyebot_angle + delta_degrees;
-
-      break;
-    }
-    default:
-      return false;
-  }
-
-  return true;
-}
-
-bool DRVSetSpeed(int lin_speed, int ang_speed)
-{
-  if (current_drv_op != DRV_OP_UNDEFINED)
-  {
-    //There is still a background timer for
-    //an ongoing drive op that must be stopped
-    timer_pause(timer_group, motor_timer_idx);
-  }
-
-  analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
-  analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
-  analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
-  analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
-
-  // Set current eyebot position
-  int x, y, angle;
-  DRVGetPosition(&x, &y, &angle);
-  DRVSetPosition(x, y, angle);
-
-  if (lin_speed < -1 * max_linear_speed)
-    lin_speed = -1 * max_linear_speed;
-  
-  if (lin_speed > max_linear_speed)
-    lin_speed = max_linear_speed;
-  
-  if (ang_speed < -1 * max_angular_speed)
-    ang_speed = -1 * max_angular_speed;
-  
-  if (ang_speed > max_angular_speed)
-    ang_speed = max_angular_speed;
-
-  eyebot_lin_speed = lin_speed;
-  eyebot_ang_speed = ang_speed;
-
-  bool reverse = lin_speed >= 0 ? false : true;
-  if (reverse)
-    lin_speed *= -1;
-
-  bool clockwise = ang_speed >= 0 ? true : false;
-  if (!clockwise)
-    ang_speed *= -1;
-  
-  float ang_speed_percentage = ang_speed / (float)max_angular_speed;
-
-  if (lin_speed != 0)
-  {
-    float lin_speed_percentage = lin_speed / (float)max_linear_speed;
-    int motor_pwm = 255 * lin_speed_percentage;
-
-    left_motor_pwm = motor_pwm + left_motor_pwm_offset;
-    right_motor_pwm = motor_pwm + right_motor_pwm_offset;
-
-    if (left_motor_pwm < 0)
-      left_motor_pwm = 0;
-    
-    if (left_motor_pwm > 255)
-      left_motor_pwm = 255;
-    
-    if (right_motor_pwm < 0)
-      right_motor_pwm = 0;
-
-    if (right_motor_pwm > 255)
-      right_motor_pwm = 255;
-
-    int ang_pwm_offset = 255 * ang_speed_percentage;
-
-    if (clockwise)
-    {
-      right_motor_pwm -= ang_pwm_offset;
-      if (right_motor_pwm < 0)
-        right_motor_pwm = 0;
-    }
-    else
-    {
-      left_motor_pwm -= ang_pwm_offset;
-      if (left_motor_pwm < 0)
-        left_motor_pwm = 0;
-    }
-
-    if (reverse)
-    {
-      analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
-      analogWrite(PIN_LEFT_MOTOR_BACKWARD, left_motor_pwm);
-      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
-      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, right_motor_pwm);
-    }
-    else
-    {
-      analogWrite(PIN_LEFT_MOTOR_FORWARD, left_motor_pwm);
-      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
-      analogWrite(PIN_RIGHT_MOTOR_FORWARD, right_motor_pwm);
-      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
-    }
-  }
-  else
-  {
-    // When turning on spot, angular speed is inherently doubled, since
-    // it only assumes that it is pivoting around a stationary wheel.
-    //ang_speed_percentage /= 2;
-
-    if (clockwise)
-    {
-      analogWrite(PIN_LEFT_MOTOR_FORWARD, 255 * ang_speed_percentage);
-      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
-      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
-      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 255 * ang_speed_percentage);
-    }
-    else
-    {
-      analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
-      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 255 * ang_speed_percentage);
-      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 255 * ang_speed_percentage);
-      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
-    }
-  }
-
-  eyebot_op_start_time = millis();
-  eyebot_op_total_time = 0;//indefinite by default
-
-  return true;
-}     
-
-static bool SetMotorKillTimer(u64 time_ms)
-{
-  esp_err_t err;
-  if (err = timer_pause(timer_group, motor_timer_idx))
-    Serial.printf("Failed to pause timer: %d\n", err);
-
-  if (err = timer_set_counter_value(timer_group, motor_timer_idx, 0))
-  {
-    Serial.printf("Failed to set timer counter to zero: %d\n", err);
-    return false;
-  }
-
-  //Assumes 2000 increments per s
-  if (err = timer_set_alarm_value(timer_group, motor_timer_idx, 2*(u64)time_ms))
-  {
-    Serial.printf("Failed to set timer alarm value: %d\n", err);
-    return false;
-  }
-
-  if (err = timer_set_alarm(timer_group, motor_timer_idx, TIMER_ALARM_EN))
-  {
-    Serial.printf("Failed to enable timer alarm: %d\n", err);
-    return false;
-  }
-
-  if (err = timer_start(timer_group, motor_timer_idx))
-  {
-    Serial.printf("Failed to start timer: %d\n", err);
-    return false;
-  }
-
-  return true;
-}
-
-bool DRVStraight(int dist, int speed)
-{
-  if (speed <= 0)
-    return false;
-  
-  if (speed > max_linear_speed)
-    speed = max_linear_speed;
-
-  bool reverse = dist < 0 ? true : false;
-  
-  if (reverse)
-  {
-    DRVSetSpeed(-1*speed, 0);
-    dist *= -1;
-  }
-  else
-    DRVSetSpeed(speed, 0);
-
-  //ms
-  float time_taken = (dist / (float)speed) * 1000;
-
-  if (!SetMotorKillTimer((u64)time_taken))
-  {
-    Serial.printf("Failed to start kill motor timer\n");
-    return false;
-  }
-  
-  eyebot_op_total_time = time_taken;
-
-  current_drv_op = DRV_OP_STRAIGHT;
-
-  return true;
-}
-
-bool DRVTurn(int angle, int speed)
-{
-  if (speed <= 0)
-    return false;
-  
-  if (speed > max_angular_speed)
-    speed = max_angular_speed;
-  
-  bool clockwise = angle < 0 ? false : true;
-
-  if (clockwise)
-    DRVSetSpeed(0, speed);
-  else
-  {
-    DRVSetSpeed(0, -1*speed);
-    angle *= -1;
-  }
-  
-  float time_taken = (angle / (float)speed) * 1000 / 2;
-
-  if (!SetMotorKillTimer((u64)time_taken))
-    return false;
-
-  eyebot_op_total_time = time_taken;
-
-  current_drv_op = DRV_OP_TURN;
-
-  return true;
-}
-
-bool DRVCurve(int dist, int angle, int lin_speed)
-{
-  if (lin_speed < 0)
-    return false;
-  
-  if (lin_speed > max_linear_speed)
-    lin_speed = max_linear_speed;
-  
-  bool reverse = dist < 0 ? true : false;
-  bool clockwise = angle >= 0 ? true : false;
-
-  if (reverse)
-    dist *= -1;
-
-  float time_taken = dist / (float)lin_speed;
-  int ang_speed = angle / time_taken;
-
-  if (clockwise)
-  {
-    if (ang_speed > max_angular_speed)
-      ang_speed = max_angular_speed;
-  }
-  else
-  {
-    if (ang_speed < -1*max_angular_speed)
-      ang_speed = -1*max_angular_speed;
-  }
-
-  if (reverse)
-    DRVSetSpeed(-1*lin_speed, ang_speed);
-  else
-    DRVSetSpeed(lin_speed, ang_speed);
-  
-  time_taken *= 1000;
-
-  if (!SetMotorKillTimer((u64)time_taken))
-    return false;
-
-  eyebot_op_total_time = time_taken;
-
-  current_drv_op = DRV_OP_CURVE;
-
-  return true;
-}
-
-bool DRVGoTo(int dx, int dy, int speed)
-{
-  if (speed <= 0 || dy == 0)
-    return false;
-
-  if (dx != 0)
-  {
-    bool reverse = dy < 0 ? true : false;
-    bool right = dx >= 0 ? true : false;
-
-    int abs_dy = abs(dy);
-    int abs_dx = abs(dx);
-
-    if (abs_dy < abs_dx)
-    {
-      if (right)
-        dx = abs_dy;
-      else
-        dx = -1*abs_dy;
-    }
-
-    float ratio = abs_dx / (float)abs_dy;
-    float rads = asinf(ratio);
-
-    float radius = abs_dy / sinf(rads);
-
-    int arc_l = radius * rads;
-    int degrees = (rads * 180/M_PI);
-
-    if (reverse)
-    {
-      if (right)
-        DRVCurve(-1*arc_l, degrees, speed);
-      else 
-        DRVCurve(-1*arc_l, -1*degrees, speed);
-    }
-    else
-    {
-      if (right)
-        DRVCurve(arc_l, degrees, speed);
-      else 
-        DRVCurve(arc_l, -1*degrees, speed);
-    }
-  }
-  else
-    DRVStraight(dy, speed);
-
-  return true;
-}
-
-bool DRVRemaining(int *dist)
-{
-  if (!dist)
-    return false;
-
-  switch (current_drv_op)
-  {
-    case DRV_OP_STRAIGHT:
-    case DRV_OP_CURVE:
-    {
-      unsigned long op_time_delta = millis() - eyebot_op_start_time;
-      int total_dist = eyebot_op_total_time * abs(eyebot_lin_speed) / 1000;
-      *dist = total_dist - (op_time_delta * abs(eyebot_lin_speed) / 1000);
-      break;
-    }
-    case DRV_OP_TURN:
-    {
-      *dist = 0;
-      break;
-    }
-    default:
-    {
-      *dist = -1;
-      return false;
-    }
-  }
-
-  return true;
-}
-
-bool DRVDone()
-{
-  if (current_drv_op != DRV_OP_UNDEFINED)
-    return false;
-  else
-    return true;
-}
-
-bool DRVWait()
-{
-  while (current_drv_op != DRV_OP_UNDEFINED);
-
-  return true;
-}
-
-/////////////////////////////////////////////
-// Position Sensitive Device (PSD) Functions
-/////////////////////////////////////////////
-
-struct RawDistancePair
-{
-  int raw;
-  int distance;//mm
-};
-
-#define RAW_DISTANCE_PAIR_COUNT 25
-
-// Read distance value in mm from distance sensor
-bool PSDGet(int *dist)
-{
-  if (!dist)
-    return false;
-  
-  static RawDistancePair pairs[RAW_DISTANCE_PAIR_COUNT] = {
-    {4000, 60},
-    {3700, 70},
-    {3240, 80},
-    {2980, 90},
-    {2740, 100},
-    {2520, 110},
-    {2340, 120},
-    {2150, 130},
-    {2030, 140},
-    {1880, 150},
-    {1780, 160},
-    {1640, 170},
-    {1570, 180},
-    {1480, 190},
-    {1430, 200},
-    {1330, 210},
-    {1260, 220},
-    {1190, 230},
-    {1175, 240},
-    {1100, 250},
-    {1050, 260},
-    {1000, 270},
-    {970, 280},
-    {930, 290},
-    {870, 300}
-  };
-
-  int val = analogRead(PIN_DIST_SENSOR);
-
-  for (int i = 0; i < RAW_DISTANCE_PAIR_COUNT; i++)
-  {
-    if (val >= pairs[i].raw)
-    {
-      *dist = pairs[i].distance;
-      return true;
-    }
-  }
-
-  *dist = 300;//max distance
-
-  return true;
-}
-
-// Read raw value from distance sensor
-bool PSDGetRaw(int *val)
-{
-  if (!val)
-    return false;
-  
-  *val = analogRead(PIN_DIST_SENSOR);
-
-  return false;
-}
-
-/////////////////
-//Old ROBIOS API
-/////////////////
 
 int LCDPrintf(const char* format, ...)
 {
@@ -1541,11 +308,11 @@ int LCDPrintf(const char* format, ...)
 
   va_list arg_ptr;
   va_start(arg_ptr, format);
-  char *str_buf = (char*)lcd_buf;
+  char *str_buf = (char*)gLCDBuffer;
 
-  vsnprintf(str_buf, sizeof(lcd_buf), format, arg_ptr);
+  vsnprintf(str_buf, sizeof(gLCDBuffer), format, arg_ptr);
 
-  tft.print(str_buf);
+  gTFT.print(str_buf);
 
   return 0;
 }
@@ -1555,29 +322,29 @@ int LCDSetPrintf(int row, int column, const char *format, ...)
   if (!format)
     return -1;
   
-  tft.setCursor(column, row);
+  gTFT.setCursor(column, row);
 
   va_list arg_ptr;
   va_start(arg_ptr, format);
-  char *str_buf = (char*)lcd_buf;
+  char *str_buf = (char*)gLCDBuffer;
 
-  vsnprintf(str_buf, sizeof(lcd_buf), format, arg_ptr);
+  vsnprintf(str_buf, sizeof(gLCDBuffer), format, arg_ptr);
 
-  tft.print(str_buf);
+  gTFT.print(str_buf);
 
   return 0;
 }
 
 int LCDClear()
 {
-  tft.fillScreen(TFT_BLACK);
+  gTFT.fillScreen(TFT_BLACK);
 
   return 0;
 }
 
 int LCDSetPos(int row, int column)
 {
-  tft.setCursor(column, row);
+  gTFT.setCursor(column, row);
 
   return 0;
 }
@@ -1587,31 +354,31 @@ int LCDGetPos(int *row, int *column)
   if (!row || !column)
     return -1;
 
-  *column = tft.getCursorX();
-  *row = tft.getCursorY();
+  *column = gTFT.getCursorX();
+  *row = gTFT.getCursorY();
 
   return 0;
 }
 
 int LCDSetColor(COLOR fg, COLOR bg)
 {
-  rgb565 fg_hue = tft.color24to16(fg);
-  rgb565 bg_hue = tft.color24to16(bg);
-  tft.setTextColor(fg_hue, bg_hue);
+  RGB565 fg_hue = rgb888To565(fg);
+  RGB565 bg_hue = rgb888To565(bg);
+  gTFT.setTextColor(fg_hue, bg_hue);
  
   return 0;
 }
 
 int LCDSetFont(int font, int variation)
 {
-  tft.setTextFont(font);
+  gTFT.setTextFont(font);
 
   return 0;
 }
 
 int LCDSetFontSize(int fontsize)
 {
-  tft.setTextSize(fontsize);
+  gTFT.setTextSize(fontsize);
 
   return 0;
 }
@@ -1644,39 +411,1289 @@ int LCDGetSize(int *x, int *y)
 
 int LCDPixel(int x, int y, COLOR col)
 {
-  rgb565 fg_hue = tft.color24to16(col);
-  tft.drawPixel(x, y, col);
+  RGB565 fg_hue = rgb888To565(col);
+  gTFT.drawPixel(x, y, col);
 
   return 0;
 }
 
-COLOR LCDGetPixel (int x, int y)
+COLOR LCDGetPixel(int x, int y)
 {
-  rgb565 col = tft.readPixel(x, y);
-  return tft.color16to24(col);
+  RGB565 col = gTFT.readPixel(x, y);
+  return rgb565To888(col);
 }
 
 int LCDLine(int x1, int y1, int x2, int y2, COLOR col)
 {
-  rgb565 hue = tft.color24to16(col);
+  RGB565 hue = rgb888To565(col);
 
   if (x1 - x2 == 0)
     if (y1 < y2)
-      tft.drawFastVLine(x1, y1, y2-y1, hue);
+      gTFT.drawFastVLine(x1, y1, y2-y1, hue);
     else
-      tft.drawFastVLine(x1, y2, y1-y2, hue);
+      gTFT.drawFastVLine(x1, y2, y1-y2, hue);
   else if (y1 - y2 == 0)
     if (x1 < x2)
-      tft.drawFastHLine(x1, y1, x2-x1, hue);
+      gTFT.drawFastHLine(x1, y1, x2-x1, hue);
     else
-      tft.drawFastHLine(x2, y1, x1-x2, hue);
+      gTFT.drawFastHLine(x2, y1, x1-x2, hue);
   else
-    tft.drawLine(x1, y1, x2, y2, hue);
+    gTFT.drawLine(x1, y1, x2, y2, hue);
  
   return 0;
 }
 
 int LCDArea(int x1, int y1, int x2, int y2, COLOR col, int fill)
 {
+  RGB565 hue = rgb888To565(col);
+
+  if (x1 > x2)
+  {
+    int tmp = x2;
+    x2 = x1;
+    x1 = tmp;
+  }
+
+  if (y1 > y2)
+  {
+    int tmp = y2;
+    y2 = y1;
+    y1 = tmp;
+  }
+
+  if (fill)
+    gTFT.fillRect(x1, y1, x2 - x1, y2 - y1, hue);
+  else
+    gTFT.drawRect(x1, y1, x2 - x1, y2 - y1, hue);
+
   return 0;
+}
+
+int LCDCircle(int x1, int y1, int radius, COLOR col, int fill)
+{
+  RGB565 hue = rgb888To565(col);
+
+  if (fill)
+    gTFT.fillCircle(x1, y1, radius, hue);
+  else 
+    gTFT.drawCircle(x1, y1, radius, hue);
+
+  return 0;
+}
+
+int LCDImageSize(int t)
+{
+  return -1;
+}
+
+int LCDImageStart(int x, int y, int xs, int ys)
+{
+  // x = x > 0 ? x : 0;
+  // x = x < LCD_WIDTH ? x : LCD_WIDTH - 1;
+  // y = y > 0 ? y : 0;
+  // y = y < LCD_HEIGHT ? y : LCD_HEIGHT - 1;
+
+  gImgXStart = x;
+  gImgYStart = y;
+
+  return 0;
+}
+
+int LCDImage(BYTE *img)
+{
+  if (!img)
+    return -1;
+  
+  COLOR *col_img = (COLOR*)img;
+
+  for (int y = 0; y < QQVGA_HEIGHT; y++)
+  {
+    for (int x = 0; x < QQVGA_WIDTH; x++)
+    {
+      int i = y*QQVGA_WIDTH + x;
+
+      gLCDBuffer[i] = rgb888To565(col_img[i]);
+      rgb565SwapEndianess(&gLCDBuffer[i]);
+    }
+  }
+
+  gTFT.pushRect(gImgXStart, gImgYStart, QQVGA_WIDTH, QQVGA_HEIGHT, gLCDBuffer);
+
+  return 0;
+}
+
+int LCDImageGray(BYTE *g)
+{
+  if (!g)
+    return -1;
+
+  for (int y = 0; y < QQVGA_HEIGHT; y++)
+  {
+    for (int x = 0; x < QQVGA_WIDTH; x++)
+    {
+      int i = y*QQVGA_WIDTH + x;
+
+      COLOR col = IPPRGB2Col(g[i], g[i], g[i]);
+
+      gLCDBuffer[i] = rgb888To565(col);
+      rgb565SwapEndianess(&gLCDBuffer[i]);
+    }
+  }
+
+  gTFT.pushRect(gImgXStart, gImgYStart, QQVGA_WIDTH, QQVGA_HEIGHT, gLCDBuffer);
+ 
+  return 0;
+}
+
+int LCDImageBinary(BYTE *b)
+{
+  if (!b)
+    return -1;
+
+  for (int y = 0; y < QQVGA_HEIGHT; y++)
+  {
+    for (int x = 0; x < QQVGA_WIDTH; x++)
+    {
+      int i = y*QQVGA_WIDTH + x;
+      gLCDBuffer[i] = b[i] ? 0xFFFF : 0;
+    }
+  }
+
+  gTFT.pushRect(gImgXStart, gImgYStart, QQVGA_WIDTH, QQVGA_HEIGHT, gLCDBuffer);
+ 
+  return 0;
+}
+
+int LCDRefresh(void)
+{
+  return -1;
+}
+
+int KEYGet(void)
+{
+  int key = NOKEY;
+
+  while (!key)
+    key = KEYRead();
+
+  return key;
+}
+
+int KEYRead(void)
+{
+  int key = NOKEY;
+
+  if (!digitalRead(PIN_LEFT_BUTTON))
+    key |= KEY1;
+
+  if (!digitalRead(PIN_RIGHT_BUTTON))
+    key |= KEY2;
+
+  return key;
+}
+
+int KEYWait(int key)
+{
+  if (!key)
+    return 0;
+  
+  int pressed = NOKEY;
+  while (!pressed)
+  {
+    pressed = KEYGet();
+    pressed &= key;
+  }
+
+  return 0;
+}        
+
+int KEYGetXY (int *x, int *y)
+{
+  *x = -1;
+  *y = -1;
+
+  if (!gTouchEnabled)
+    return -1;
+
+  while (x < 0 || y < 0)
+    KEYReadXY(x, y);
+  
+  return 0;
+}  
+
+int KEYReadXY(int *x, int *y)
+{
+  *x = -1;
+  *y = -1;
+
+  if (!gTouchEnabled)
+    return -1;
+
+  if (gTouch.read())
+  {
+    TP_Point t = gTouch.getPoint(0);
+    *x = t.x;
+    *y = t.y;
+  }
+
+  return 0;
+}
+
+int CAMInit(int resolution)
+{
+  return 0;
+}
+
+int CAMRelease(void)
+{
+  return 0; 
+}
+
+int CAMGet(BYTE *buf)
+{  
+  if (!buf)
+    return -1;
+
+  BYTE *rx_buf = (BYTE*)gLCDBuffer;
+
+  for (int i = 0; i < CAM_NUM_IMAGE_SEGMENTS; i++)
+  {
+    spi_transaction_t t = {};
+    t.length = MAX_RX_SEGMENT_SIZE*8;//bit length
+    t.tx_buffer = NULL;
+    t.rx_buffer = rx_buf + i*MAX_RX_SEGMENT_SIZE;
+
+    while (digitalRead(PIN_CAM_SIGNAL));
+
+    esp_err_t err = spi_device_transmit(gCamSPIHandle, &t);
+    assert(err == ESP_OK);
+  }
+
+  RGB565 *pixels = (RGB565*)rx_buf;
+  COLOR *img = (COLOR*)buf;
+
+  for (int i = 0; i < QQVGA_WIDTH*QQVGA_HEIGHT; i++)
+  {
+    rgb565SwapEndianess(&pixels[i]);
+    img[i] = rgb565To888(pixels[i]);
+  }
+
+  return 0;
+}
+
+int CAMGetGray(BYTE *buf)
+{
+  if (!buf)
+    return -1;
+
+  BYTE *rx_buf = (BYTE*)gLCDBuffer;
+
+  for (int i = 0; i < CAM_NUM_IMAGE_SEGMENTS; i++)
+  {
+    spi_transaction_t t = {};
+    t.length = MAX_RX_SEGMENT_SIZE*8;//bit length
+    t.tx_buffer = NULL;
+    t.rx_buffer = rx_buf + i*MAX_RX_SEGMENT_SIZE;
+
+    while (digitalRead(PIN_CAM_SIGNAL));
+
+    esp_err_t err = spi_device_transmit(gCamSPIHandle, &t);
+    assert(err == ESP_OK);
+  }
+
+  RGB565 *pixels = (RGB565*)rx_buf;
+
+  for (int i = 0; i < QQVGA_WIDTH*QQVGA_HEIGHT; i++)
+  {
+    rgb565SwapEndianess(&pixels[i]);
+    COLOR col = rgb565To888(pixels[i]);
+
+    BYTE r, g, b;
+    IPPCol2RGB(col, &r, &g, &b);
+
+    buf[i] = (r + g + b)/3;
+  }
+
+  return 0;
+}
+
+int IPSetSize(int resolution)
+{
+  return -1;
+}
+
+int IPReadFile(char *filename, BYTE* img)
+{
+  return -1;
+}
+
+int IPWriteFile(char *filename, BYTE* img)
+{
+  return -1;
+}
+
+int IPWriteFileGray(char *filename, BYTE* gray)
+{
+  return -1;
+}
+
+void IPLaplace(BYTE* grayIn, BYTE* grayOut)
+{ 
+  if (!grayIn || !grayOut)
+    return;
+
+  for (int y = 1; y < QQVGA_HEIGHT - 1; y++)
+  {
+    for (int x = 1; x < QQVGA_WIDTH - 1; x++)
+    {
+      int i = y*QQVGA_WIDTH + x;
+
+      int delta = abs(4*grayIn[i] - grayIn[i-1] - grayIn[i+1] - grayIn[i-QQVGA_WIDTH] - grayIn[i+QQVGA_WIDTH]);
+
+      if (delta > 0xFF) 
+        delta = 0xFF;
+
+      grayOut[i] = (BYTE)delta;
+    }
+  }
+}
+
+void IPSobel(BYTE* grayIn, BYTE* grayOut)
+{
+  if (!grayIn || !grayOut)
+    return;
+
+  memset(grayOut, 0, QQVGA_WIDTH); // clear first row
+
+  for (int y = 1; y < QQVGA_HEIGHT-1; y++)
+  {
+    for (int x = 1; x < QQVGA_WIDTH-1; x++)
+    {
+      int i = y*QQVGA_WIDTH + x;
+
+      int deltaX = 2*grayIn[i+1] + grayIn[i-QQVGA_WIDTH+1] + grayIn[i+QQVGA_WIDTH+1] - 2*grayIn[i-1] - grayIn[i-QQVGA_WIDTH-1] - grayIn[i+QQVGA_WIDTH-1];
+      int deltaY = grayIn[i-QQVGA_WIDTH-1] + 2*grayIn[i-QQVGA_WIDTH] + grayIn[i-QQVGA_WIDTH+1] - grayIn[i+QQVGA_WIDTH-1] - 2*grayIn[i+QQVGA_WIDTH] - grayIn[i+QQVGA_WIDTH+1];
+
+      int grad = (abs(deltaX) + abs(deltaY)) / 3;
+      if (grad > 0xFF) 
+        grad = 0xFF;
+
+      grayOut[i] = (BYTE)grad;
+    }
+  }
+
+  memset(grayOut + (QQVGA_HEIGHT-1)*(QQVGA_WIDTH), 0, QQVGA_WIDTH); 
+}
+
+void IPCol2Gray(BYTE* imgIn, BYTE* grayOut)
+{
+  if (!imgIn || !grayOut)
+    return;
+  
+  COLOR *img = (COLOR*)imgIn;
+
+  for (int y = 0; y < QQVGA_HEIGHT; y++)
+  {
+    for (int x = 0; x < QQVGA_WIDTH; x++)
+    {
+      int i = y * QQVGA_WIDTH + x;
+
+      BYTE r, g, b;
+      IPPCol2RGB(img[i], &r, &g, &b);
+
+      grayOut[i] = (r + g + b)/3;
+    }
+  }
+}
+
+void IPGray2Col(BYTE* imgIn, BYTE* colOut)
+{
+  if (!imgIn || !colOut)
+    return;
+  
+  COLOR *col = (COLOR*)colOut;
+
+  for (int y = 0; y < QQVGA_HEIGHT; y++)
+  {
+    for (int x = 0; x < QQVGA_WIDTH; x++)
+    {
+      int i = y * QQVGA_WIDTH + x;
+      col[i] = IPPRGB2Col(imgIn[i], imgIn[i], imgIn[i]);
+    }
+  }
+}
+
+void IPRGB2Col(BYTE* r, BYTE* g, BYTE* b, BYTE* imgOut)
+{
+  COLOR *img = (COLOR*)imgOut;
+
+  for (int y = 0; y < QQVGA_HEIGHT; y++)
+  {
+    for (int x = 0; x < QQVGA_WIDTH; x++)
+    {
+      int i = y * QQVGA_WIDTH + x;
+
+      img[i] = IPPRGB2Col(r[i], g[i], b[i]);
+    }
+  }
+}
+
+void IPCol2HSI(BYTE* img, BYTE* h, BYTE* s, BYTE* i)
+{
+  if (!h || !s || !i)
+    return;
+
+  COLOR *col = (COLOR*)img;
+
+  for (int y = 0; y < QQVGA_HEIGHT; y++)
+  {
+    for (int x = 0; x < QQVGA_WIDTH; x++)
+    {
+      int idx = y * QQVGA_WIDTH + x;
+
+      IPPCol2HSI(col[idx], &h[idx], &s[idx], &i[idx]);
+    }
+  }
+}
+
+void IPOverlay(BYTE* c1, BYTE* c2, BYTE* cOut)
+{
+  if (!c1 || !c2 || !cOut)
+    return;
+
+  COLOR *out = (COLOR*)cOut;
+  COLOR *img1 = (COLOR*)c1;
+  COLOR *img2 = (COLOR*)c2;
+
+  for (int y = 0; y < QQVGA_HEIGHT; y++)
+  {
+    for (int x = 0; x < QQVGA_WIDTH; x++)
+    {
+      int i = y*QQVGA_WIDTH + x;
+      out[i] = img2[i] ? img2[i] : img1[i];
+    }
+  }
+}
+
+void IPOverlayGray(BYTE* g1, BYTE* g2, COLOR col, BYTE* cOut)
+{
+  if (!g1 || !g2 || !cOut)
+    return;
+  
+  COLOR *out = (COLOR*)cOut;
+
+  for (int y = 0; y < QQVGA_HEIGHT; y++)
+  {
+    for (int x = 0; x < QQVGA_WIDTH; x++)
+    {
+      int i = y*QQVGA_WIDTH + x;
+      out[i] = g2[i] ? col : IPPRGB2Col(g1[i], g1[i], g1[i]);
+    }
+  }
+}
+
+COLOR IPPRGB2Col(BYTE r, BYTE g, BYTE b)
+{
+  RGB565 col = gTFT.color565(r, g, b);
+  return rgb565To888(col);
+}
+
+void IPPCol2RGB(COLOR col, BYTE* r, BYTE* g, BYTE* b)
+{
+  if (!r || !g || !b)
+    return;
+  
+  *r = (col >> 16) & 0xFF;
+  *g = (col >> 8) & 0xFF;
+  *b = (col) & 0xFF;
+}
+
+void IPPCol2HSI(COLOR col, BYTE *h, BYTE *s, BYTE *i)
+{
+  if (!h || !s || !s)
+    return;
+
+  BYTE r, g, b;
+  IPPCol2RGB(col, &r, &g, &b);
+  IPPRGB2HSI(r, g, b, h, s, i);
+}
+
+BYTE IPPRGB2Hue(BYTE r, BYTE g, BYTE b)
+{
+  BYTE max   = MAX(r, MAX(g, b));
+  BYTE min   = MIN(r, MIN(g, b));
+  BYTE delta = max - min;
+
+  int i = (r + g + b)/3;
+
+  BYTE h = 0;
+
+  if ((2*delta > max) && (i > INTENSITY_THRESHOLD))
+  { 
+    if (r == max) 
+      h = 43 + 42*(g-b)/delta; // +/-42 [  1.. 85]
+    else if (g == max) 
+      h = 128 + 42*(b-r)/delta; // +/-42 [ 86..170]
+    else if (b == max) 
+      h = 213 + 42*(r-g)/delta; // +/-42 [171..255]
+  }
+  else
+    h = 0;
+
+  return h;// grayscale, not color
+}
+
+void IPPRGB2HSI(BYTE r, BYTE g, BYTE b, BYTE* h, BYTE* s, BYTE* i)
+{
+  if (!h || !s || !s)
+    return;
+
+  BYTE max   = MAX(r, MAX(g, b));
+  BYTE min   = MIN(r, MIN(g, b));
+  BYTE delta = max - min;
+
+  *i = (r + g + b)/3;
+
+  if (*i > 0) 
+    *s = 255 - (255 * min)/(*i);
+  else 
+    *s = 0;
+
+  if ((2*delta > max) && (*i > INTENSITY_THRESHOLD))
+  { 
+    if (r == max) 
+      *h =  43 + 42*(g-b)/delta; // +/-42 [  1.. 85]
+    else if (g == max) 
+      *h = 128 + 42*(b-r)/delta; // +/-42 [ 86..170]
+    else if (b == max) 
+      *h = 213 + 42*(r-g)/delta; // +/-42 [171..255]
+  }
+  else 
+    *h = 0; // grayscale, not color
+}
+
+char* OSExecute(char* command)
+{
+  return NULL;
+}
+
+int OSVersion(char* buf)
+{
+  return -1;
+}
+
+int OSVersionIO(char* buf)
+{
+  return -1;
+}
+
+int OSMachineSpeed(void)
+{
+  return -1;
+}
+
+int OSMachineType(void)
+{
+  return -1;
+}
+
+int OSMachineName(char* buf)
+{
+  return -1;
+}
+
+int OSMachineID(void)
+{
+  return -1;
+}
+
+int OSWait(int n)
+{
+  return -1;
+}
+
+TIMER OSAttachTimer(int scale, void (*fct)(void))
+{
+  return -1;
+}
+
+int OSDetachTimer(TIMER t)
+{
+  return -1;
+}
+
+int OSGetTime(int *hrs,int *mins,int *secs,int *ticks)
+{
+  return -1;
+}
+
+int OSGetCount(void)
+{
+  return -1;
+}
+
+int SERInit(int interface, int baud,int handshake)
+{
+  return -1;
+}
+
+int SERSendChar(int interface, char ch)
+{
+  return -1;
+}
+
+int SERSend(int interface, char *buf)
+{
+  return -1;
+}
+
+char SERReceiveChar(int interface)
+{
+  return -1;
+}
+
+int SERReceive(int interface, char *buf, int size)
+{
+  return -1;
+}
+
+int SERFlush(int interface)
+{
+  return -1;
+}
+
+int SERClose(int interface)
+{
+  return -1;
+}
+
+int AUBeep(void)
+{
+  return -1;
+}
+
+int AUPlay(char* filename)
+{
+  return -1;
+}
+
+int AUDone(void)
+{
+  return -1;
+}
+
+int AUMicrophone(void)
+{
+  return -1;
+}
+
+int PSDGet(int psd)
+{
+  if (psd != PSD_FRONT)
+    return -1;
+  
+  static RawDistancePair pairs[RAW_DISTANCE_PAIR_COUNT] = {
+    {4000, 60},
+    {3700, 70},
+    {3240, 80},
+    {2980, 90},
+    {2740, 100},
+    {2520, 110},
+    {2340, 120},
+    {2150, 130},
+    {2030, 140},
+    {1880, 150},
+    {1780, 160},
+    {1640, 170},
+    {1570, 180},
+    {1480, 190},
+    {1430, 200},
+    {1330, 210},
+    {1260, 220},
+    {1190, 230},
+    {1175, 240},
+    {1100, 250},
+    {1050, 260},
+    {1000, 270},
+    {970, 280},
+    {930, 290},
+    {870, 300}
+  };
+
+  int val = PSDGetRaw(psd);
+
+  for (int i = 0; i < RAW_DISTANCE_PAIR_COUNT; i++)
+  {
+    if (val >= pairs[i].raw)
+      return pairs[i].distance;
+  }
+
+  return 300;//max distance
+}
+
+int PSDGetRaw(int psd)
+{
+  if (psd != PSD_FRONT)
+    return -1;
+
+  return analogRead(PIN_DIST_SENSOR);
+}
+
+int LIDARGet(int distance[])
+{
+  return -1;
+}
+
+int LIDARSet(int range, int tilt, int points)
+{
+  return -1;
+}
+
+int SERVOSet(int servo, int angle)
+{
+  return -1;
+}
+
+int SERVOSetRaw (int servo, int angle)
+{
+  return -1;
+}
+
+int SERVORange(int servo, int low, int high)
+{
+  return -1;
+}
+
+int MOTORDrive(int motor, int speed)
+{
+  return -1;
+}
+
+int MOTORDriveRaw(int motor, int speed)
+{
+  return -1;
+}
+
+int MOTORPID(int motor, int p, int i, int d)
+{
+  return -1;
+}
+
+int MOTORPIDOff(int motor)
+{
+  return -1;
+}
+
+int MOTORSpeed(int motor, int ticks)
+{
+  return -1;
+}
+
+int ENCODERRead(int quad)
+{
+  return -1;
+}
+
+int ENCODERReset(int quad)
+{
+  return -1;
+}
+
+int VWSetOffsets(int left_offset, int right_offset)
+{
+  gLeftMotorOffset = left_offset < -255 || left_offset > 255 ? 0 : left_offset;
+  gRightMotorOffset = right_offset < -255 || right_offset > 255 ? 0 : right_offset;
+
+  return 0;
+}
+
+int VWSetSpeed(int lin_speed, int ang_speed)
+{
+  if (gCurrentVWOp != VW_OP_UNDEFINED)
+  {
+    //There is still a background timer for
+    //an ongoing drive op that must be stopped
+    timer_pause(gTimerGroup, gMotorTimerIdx);
+  }
+
+  analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
+  analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
+  analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
+  analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
+
+  // Set current eyebot position
+  int x, y, angle;
+  VWGetPosition(&x, &y, &angle);
+  VWSetPosition(x, y, angle);
+
+  if (lin_speed < -1 * MAX_LIN_SPEED)
+    lin_speed = -1 * MAX_LIN_SPEED;
+  
+  if (lin_speed > MAX_LIN_SPEED)
+    lin_speed = MAX_LIN_SPEED;
+  
+  if (ang_speed < -1 * MAX_ANG_SPEED)
+    ang_speed = -1 * MAX_ANG_SPEED;
+  
+  if (ang_speed > MAX_ANG_SPEED)
+    ang_speed = MAX_ANG_SPEED;
+
+  gLinSpeed = lin_speed;
+  gAngSpeed = ang_speed;
+
+  bool reverse = lin_speed >= 0 ? false : true;
+  if (reverse)
+    lin_speed *= -1;
+
+  bool clockwise = ang_speed >= 0 ? true : false;
+  if (!clockwise)
+    ang_speed *= -1;
+  
+  float ang_speed_percentage = ang_speed / (float)MAX_ANG_SPEED;
+
+  if (lin_speed != 0)
+  {
+    float lin_speed_percentage = lin_speed / (float)MAX_LIN_SPEED;
+    int motor_pwm = 255 * lin_speed_percentage;
+
+    gLeftMotorPWM = motor_pwm + gLeftMotorOffset;
+    gRightMotorPWM = motor_pwm + gRightMotorOffset;
+
+    if (gLeftMotorPWM < 0)
+      gLeftMotorPWM = 0;
+    
+    if (gLeftMotorPWM > 255)
+      gLeftMotorPWM = 255;
+    
+    if (gRightMotorPWM < 0)
+      gRightMotorPWM = 0;
+
+    if (gRightMotorPWM > 255)
+      gRightMotorPWM = 255;
+
+    int ang_pwm_offset = 255 * ang_speed_percentage;
+
+    if (clockwise)
+    {
+      gRightMotorPWM -= ang_pwm_offset;
+      if (gRightMotorPWM < 0)
+        gRightMotorPWM = 0;
+    }
+    else
+    {
+      gLeftMotorPWM -= ang_pwm_offset;
+      if (gLeftMotorPWM < 0)
+        gLeftMotorPWM = 0;
+    }
+
+    if (reverse)
+    {
+      analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
+      analogWrite(PIN_LEFT_MOTOR_BACKWARD, gLeftMotorPWM);
+      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
+      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, gRightMotorPWM);
+    }
+    else
+    {
+      analogWrite(PIN_LEFT_MOTOR_FORWARD, gLeftMotorPWM);
+      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
+      analogWrite(PIN_RIGHT_MOTOR_FORWARD, gRightMotorPWM);
+      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
+    }
+  }
+  else
+  {
+    // When turning on spot, angular speed is inherently doubled, since
+    // it only assumes that it is pivoting around a stationary wheel.
+    //ang_speed_percentage /= 2;
+
+    if (clockwise)
+    {
+      analogWrite(PIN_LEFT_MOTOR_FORWARD, 255 * ang_speed_percentage);
+      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
+      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
+      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 255 * ang_speed_percentage);
+    }
+    else
+    {
+      analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
+      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 255 * ang_speed_percentage);
+      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 255 * ang_speed_percentage);
+      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
+    }
+  }
+
+  gOpStartTime = millis();
+
+  gOpTotalTime = 0;//indefinite by default
+
+  return 0;
+}     
+
+int VWGetSpeed(int *linSpeed, int *angSpeed)
+{
+  if (!linSpeed || !angSpeed)
+    return -1;
+
+  *linSpeed = gLinSpeed;
+  *angSpeed = gAngSpeed;
+
+  return 0;
+}
+
+int VWSetPosition(int x, int y, int phi)
+{
+  gXPos = x;
+  gYPos = y;
+  gAngle = phi;
+
+  return 0;
+}
+
+int VWGetPosition(int *x, int *y, int *phi)
+{  
+  if (!x || !y || !phi)
+    return -1;
+  
+  unsigned long delta = millis() - gOpStartTime;
+
+  switch (gCurrentVWOp)
+  {
+    case VW_OP_UNDEFINED:
+    case VW_OP_STRAIGHT:
+    case VW_OP_CURVE:
+    {
+      float delta_arc = gLinSpeed * (delta / 1000.0f);
+      float eyebot_angle_rad = gAngle * M_PI / 180.0f;
+      float delta_degrees = gAngSpeed * (delta / 1000.0f);
+
+      int dx = 0, dy = 0;
+      if (gAngSpeed != 0 && delta != 0)
+      {
+        float delta_rad = delta_degrees * M_PI / 180.0f;
+        float radius = delta_arc / delta_rad;
+
+        dy = radius * sinf(eyebot_angle_rad + delta_rad);
+        dx = radius - (radius * cosf(eyebot_angle_rad + delta_rad));
+      }
+      else
+      {
+        dy = delta_arc * cosf(eyebot_angle_rad);
+        dx = delta_arc * sinf(eyebot_angle_rad);
+      }
+
+      *x = gXPos + dx;
+      *y = gYPos + dy;
+      *phi = gAngle + delta_degrees;
+
+      break;
+    }
+    case VW_OP_TURN:
+    {
+      float delta_degrees = gAngSpeed * (delta / 1000.0f);
+
+      *x = gXPos;
+      *y = gYPos;
+      *phi = gAngle + delta_degrees;
+
+      break;
+    }
+    default:
+      break;
+  }
+
+  return 0;
+}
+
+int VWStraight(int dist, int lin_speed)
+{  
+  if (lin_speed <= 0)
+    return -1;
+  
+  if (lin_speed > MAX_LIN_SPEED)
+    lin_speed = MAX_LIN_SPEED;
+
+  bool reverse = dist < 0 ? true : false;
+  
+  if (reverse)
+  {
+    VWSetSpeed(-1*lin_speed, 0);
+    dist *= -1;
+  }
+  else
+    VWSetSpeed(lin_speed, 0);
+
+  //ms
+  float time_taken = (dist / (float)lin_speed) * 1000;
+
+  if (!setMotorKillTimer((u64)time_taken))
+  {
+    //Serial.printf("Failed to start kill motor timer\n");
+    return false;
+  }
+  
+  gOpTotalTime = time_taken;
+
+  gCurrentVWOp = VW_OP_STRAIGHT;
+
+  return 0;
+}
+
+int VWTurn(int angle, int ang_speed)
+{
+  if (ang_speed)
+    return -1;
+  
+  if (ang_speed > MAX_ANG_SPEED)
+    ang_speed = MAX_ANG_SPEED;
+  
+  bool clockwise = angle < 0 ? false : true;
+
+  if (clockwise)
+    VWSetSpeed(0, ang_speed);
+  else
+  {
+    VWSetSpeed(0, -1*ang_speed);
+    angle *= -1;
+  }
+  
+  float time_taken = (angle / (float)ang_speed) * 1000 / 2;
+
+  if (!setMotorKillTimer((u64)time_taken))
+    return -1;
+
+  gOpTotalTime = time_taken;
+
+  gCurrentVWOp = VW_OP_TURN;
+
+  return 0;
+}
+
+int VWCurve(int dist, int angle, int lin_speed)
+{
+  if (lin_speed < 0)
+    return -1;
+  
+  if (lin_speed > MAX_LIN_SPEED)
+    lin_speed = MAX_LIN_SPEED;
+  
+  bool reverse = dist < 0 ? true : false;
+  bool clockwise = angle >= 0 ? true : false;
+
+  if (reverse)
+    dist *= -1;
+
+  float time_taken = dist / (float)lin_speed;
+  int ang_speed = angle / time_taken;
+
+  if (clockwise)
+  {
+    if (ang_speed > MAX_ANG_SPEED)
+      ang_speed = MAX_ANG_SPEED;
+  }
+  else
+  {
+    if (ang_speed < -1*MAX_ANG_SPEED)
+      ang_speed = -1*MAX_ANG_SPEED;
+  }
+
+  if (reverse)
+    VWSetSpeed(-1*lin_speed, ang_speed);
+  else
+    VWSetSpeed(lin_speed, ang_speed);
+  
+  time_taken *= 1000;
+
+  if (!setMotorKillTimer((u64)time_taken))
+    return -1;
+
+  gOpTotalTime = time_taken;
+
+  gCurrentVWOp = VW_OP_CURVE;
+
+  return 0;
+}
+
+int VWDrive(int dx, int dy, int lin_speed)
+{  
+  if (lin_speed <= 0 || dy == 0)
+    return -1;
+
+  if (dx != 0)
+  {
+    bool reverse = dy < 0 ? true : false;
+    bool right = dx >= 0 ? true : false;
+
+    int abs_dy = abs(dy);
+    int abs_dx = abs(dx);
+
+    if (abs_dy < abs_dx)
+    {
+      if (right)
+        dx = abs_dy;
+      else
+        dx = -1*abs_dy;
+    }
+
+    float ratio = abs_dx / (float)abs_dy;
+    float rads = asinf(ratio);
+
+    float radius = abs_dy / sinf(rads);
+
+    int arc_l = radius * rads;
+    int degrees = (rads * 180/M_PI);
+
+    if (reverse)
+      arc_l *= -1;
+
+    if (right)
+      VWCurve(arc_l, degrees, lin_speed);
+    else 
+      VWCurve(arc_l, -1*degrees, lin_speed);
+  }
+  else
+    VWStraight(dy, lin_speed);
+
+  return 0;
+}
+
+int VWRemain(void)
+{
+  int dist = -1;
+
+  switch (gCurrentVWOp)
+  {
+    case VW_OP_STRAIGHT:
+    case VW_OP_CURVE:
+    {
+      unsigned long op_time_delta = millis() - gOpStartTime;
+      int total_dist = gOpTotalTime * abs(gLinSpeed) / 1000;
+      dist = total_dist - (op_time_delta * abs(gLinSpeed) / 1000);
+      break;
+    }
+    case VW_OP_TURN:
+    {
+      dist = 0;
+      break;
+    }
+    default:
+      break;
+  }
+
+  return dist;
+}
+
+int VWDone(void)
+{  
+  if (gCurrentVWOp != VW_OP_UNDEFINED)
+    return 0;
+  else
+    return 1;
+}
+
+int VWWait(void)
+{  
+  while (gCurrentVWOp != VW_OP_UNDEFINED){}
+
+  return 0;
+}
+
+int VWStalled(void)
+{
+  return -1;
+}
+
+int DIGITALSetup(int io, char direction)
+{
+  return -1;
+}
+
+int DIGITALRead(int io)
+{
+  return -1;
+}
+
+int DIGITALReadAll(void)
+{
+  return -1;
+}
+
+int DIGITALWrite(int io, int state)
+{
+  return -1;
+}
+
+int ANALOGRead(int channel)
+{
+  return -1;
+}
+
+int ANALOGVoltage(void)
+{
+  return -1;
+}
+
+int ANALOGRecord(int channel, int iterations)
+{
+  return -1;
+}
+
+int ANALOGTransfer(BYTE* buffer)
+{
+  return -1;
+}
+
+int IRTVGet(void)
+{
+  return -1;
+}
+
+int IRTVRead(void)
+{
+  return -1;
+}
+
+int IRTVFlush(void)
+{
+  return -1;
+}
+
+int IRTVGetStatus(void)
+{
+  return -1;
+}
+
+int RADIOInit(void)
+{
+  return -1;
+}
+
+int RADIOGetID(void)
+{
+  return -1;
+}
+
+int RADIOSend(int id, char* buf)
+{
+  return -1;
+}
+
+int RADIOReceive(int *id_no, char* buf, int size)
+{
+  return -1;
+} 
+
+int RADIOCheck(void)
+{
+  return -1;
+}                           
+
+int RADIOStatus(int IDlist[])
+{
+  return -1;
+}                  
+
+int RADIORelease(void)
+{
+  return -1;
 }
