@@ -23,8 +23,7 @@
 To install this library, just place this entire folder as a subfolder in your
 Arduino libraries folder for your respective platform.
 
-The TFT_eSPI and TouchLib libraries must also be copied into to the Arduino libraries folder
-from the versions found in https://github.com/Xinyuan-LilyGO/T-Display-S3/tree/main/lib .
+The TFT_eSPI and TouchLib libraries must also be copied from this repo's ```libs``` folder into to the Arduino libraries folder.
 
 # Usage
 
