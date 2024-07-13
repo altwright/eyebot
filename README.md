@@ -28,11 +28,13 @@ from the versions found in https://github.com/Xinyuan-LilyGO/T-Display-S3/tree/m
 
 # Usage
 
+## T-Display-S3
+
 Add...
 
 ```#include <eyebot.h>```
 
-... to your Arduino .ino sketch and set the board type as "ESP32S3 Dev Module",
+... to your Arduino ```.ino``` sketch and set the board type as "ESP32S3 Dev Module",
 with the settings under the "Tools" dropdown menu adjusted to:
 
 | Arduino IDE Setting                  | Value                             |
@@ -54,3 +56,9 @@ with the settings under the "Tools" dropdown menu adjusted to:
 | Upload Mode                          | **UART0/Hardware CDC**            |
 | Upload Speed                         | 921600                            |
 | USB Mode                             | **CDC and JTAG**                  |
+
+## ESP32-CAM
+
+Set board-type to "AI-Thinker ESP32-CAM" and upload ```camera.ino```. 
+
+When new code is uploaded to the T-Display-S3 while both the T-Display-S3 and the ESP32-CAM are on-board the EyeBot, the image that the ESP32-CAM returns will most likely be out of sync. Disconnecting the EyeBot from power and then reconnecting it should fix this.
