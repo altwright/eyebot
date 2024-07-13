@@ -1166,7 +1166,53 @@ int SERVORange(int servo, int low, int high)
 
 int MOTORDrive(int motor, int speed)
 {
-  return -1;
+  if (speed < -100 || speed > 100)
+    return -1;
+
+  if (motor < 0 || motor > 1)
+    return -1;
+
+  if (gCurrentVWOp != VW_OP_UNDEFINED)
+  {
+    //There is still a background timer for
+    //an ongoing drive op that must be stopped
+    timer_pause(gTimerGroup, gMotorTimerIdx);
+    gCurrentVWOp = VW_OP_UNDEFINED;
+  }
+
+  bool reverse = speed < 0 ? true : false;
+  float percentage = reverse ? -1*speed / 100.0f : speed / 100.0f;
+
+  int pwm = 255*percentage;
+
+  if (motor == 0)
+  {
+    if (reverse)
+    {
+      analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
+      analogWrite(PIN_LEFT_MOTOR_BACKWARD, pwm);
+    }
+    else
+    {
+      analogWrite(PIN_LEFT_MOTOR_FORWARD, pwm);
+      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
+    }
+  }
+  else
+  {
+    if (reverse)
+    {
+      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
+      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, pwm);
+    }
+    else
+    {
+      analogWrite(PIN_RIGHT_MOTOR_FORWARD, pwm);
+      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
+    }
+  }
+
+  return 0;
 }
 
 int MOTORDriveRaw(int motor, int speed)

@@ -30,7 +30,7 @@ void DemoDriveToColor()
   bool quit = false, ui_init = false, show_overlay = false;
   COLOR selected_color = RED;
   int hue_threshold = 10, sat_threshold = 10, int_threshold = 10;
-  int lin_speed = 200, ang_speed = 120;
+  int lin_speed = 260, ang_speed = 120;
 
   enum {
     D2C_PHASE_SEEKING, 

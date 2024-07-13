@@ -103,7 +103,9 @@ void setup() {
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_RGB565; //YUV422,GRAYSCALE,RGB565,JPEG
   config.frame_size = FRAMESIZE_QQVGA;
-  config.fb_count = 1;
+  config.fb_count = 3;
+  config.grab_mode = CAMERA_GRAB_LATEST;
+  config.fb_location = CAMERA_FB_IN_PSRAM;
   config.jpeg_quality = 0;
 
   ret = esp_camera_init(&config);
@@ -127,6 +129,9 @@ void setup() {
 
 void loop() {
   camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb)
+    return;
+
   uint8_t *img_bytes = fb->buf;
 
   uint16_t *img = (uint16_t*)img_bytes;
