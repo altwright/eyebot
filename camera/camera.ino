@@ -2,7 +2,6 @@
 #include <esp_camera.h>
 #include <esp_heap_caps.h>
 #include <JPEGENC.h>
-#include <Arduino.h>
 
 // START Pin definition for CAMERA_MODEL_AI_THINKER
 #define PWDN_GPIO_NUM     32
@@ -106,10 +105,12 @@ void setup() {
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
-  config.pixel_format = PIXFORMAT_RGB565; //YUV422,GRAYSCALE,RGB565,JPEG
+  config.pixel_format = PIXFORMAT_JPEG; //YUV422,GRAYSCALE,RGB565,JPEG
   config.frame_size = FRAMESIZE_QQVGA;
+  config.fb_location = CAMERA_FB_IN_PSRAM;
+  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
   config.fb_count = 1;
-  config.jpeg_quality = 63;
+  config.jpeg_quality = 14;
 
   ret = esp_camera_init(&config);
   if (ret != ESP_OK) {
@@ -118,9 +119,9 @@ void setup() {
   }
 
   sensor_t *sensor = esp_camera_sensor_get();
-  sensor->set_brightness(sensor, 0);     // -2 to 2
+  sensor->set_brightness(sensor, 1);     // -2 to 2
   sensor->set_contrast(sensor, 0);       // -2 to 2
-  sensor->set_saturation(sensor, 1);     // -2 to 2
+  sensor->set_saturation(sensor, 2);     // -2 to 2
   sensor->set_hmirror(sensor, 0);        // 0 = disable , 1 = enable
   sensor->set_vflip(sensor, 0);          // 0 = disable , 1 = enable
   sensor->set_colorbar(sensor, 0);       // 0 = disable , 1 = enable
@@ -130,58 +131,36 @@ void setup() {
 }
 
 void loop() {
-  JPEGENCODE enc;
-
+  static uint32_t dataSize = 0;
   camera_fb_t *fb = esp_camera_fb_get();
-  uint8_t *img_bytes = fb->buf;
-
-  uint16_t *img = (uint16_t*)img_bytes;
-
-  for (int y = 0; y < QQVGA_HEIGHT; y++)
+  if (fb)
   {
-    for (int x = 0; x < QQVGA_WIDTH; x++)
-    {
-      uint16_t *pixel = img + y*QQVGA_WIDTH + x;
-      uint16_t lower = (*pixel & 0xFF00) >> 8;
-      *pixel <<= 8;
-      *pixel |= lower;
-    }
+    uint8_t *img_bytes = fb->buf;
+    uint32_t dataSize = fb->len;
+    memcpy(dma_bytes, img_bytes, dataSize);
+    esp_camera_fb_return(fb);
   }
 
-  int err_no;
-  err_no = jpgenc.open(dma_bytes, QQVGA_RGB565_BUFFER_SIZE);
-  assert(!err_no);
-  err_no = jpgenc.encodeBegin(&enc, QQVGA_WIDTH, QQVGA_HEIGHT, JPEGE_PIXEL_RGB565, JPEGE_SUBSAMPLE_444, JPEGE_Q_LOW);
-  assert(!err_no);
-  err_no = jpgenc.addFrame(&enc, img_bytes, QQVGA_WIDTH * sizeof(uint16_t));
-  assert(!err_no);
-  int dataSize = jpgenc.close();
-
-  esp_camera_fb_return(fb);
-
-  // spi_slave_transaction_t t = {};
-  // t.length = sizeof(int) * 8;
-  // t.tx_buffer = &dataSize;
-  // t.rx_buffer = NULL;
-  // esp_err_t err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
-  // assert(err == ESP_OK);
-
-  // int num_segs = (dataSize / MAX_TX_SEGMENT_SIZE) + 1;
-
-  // for (int i = 0; i < num_segs - 1; i++)
-  // {
-  //   t = {};
-  //   t.length = MAX_TX_SEGMENT_SIZE * 8;
-  //   t.tx_buffer = dma_bytes + i*MAX_TX_SEGMENT_SIZE;
-  //   t.rx_buffer = NULL;
-  //   err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
-  //   assert(err == ESP_OK);
-  // }
-
   spi_slave_transaction_t t = {};
-  t.length = MAX_TX_SEGMENT_SIZE * 8;
-  t.tx_buffer = dma_bytes;
-  t.rx_buffer = NULL;
+  t.length = sizeof(dataSize) * 8;
+  t.tx_buffer = &dataSize;
   esp_err_t err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
   assert(err == ESP_OK);
+
+  t = {};
+  t.length = MAX_TX_SEGMENT_SIZE * 8;
+  t.tx_buffer = dma_bytes;
+  err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
+  assert(err == ESP_OK);
+
+  int num_segs = (dataSize / MAX_TX_SEGMENT_SIZE) + 1;
+
+  for (int i = 1; i < num_segs; i++)
+  {
+    t = {};
+    t.length = MAX_TX_SEGMENT_SIZE * 8;
+    t.tx_buffer = dma_bytes + i*MAX_TX_SEGMENT_SIZE;
+    err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
+    assert(err == ESP_OK);
+  }
 }

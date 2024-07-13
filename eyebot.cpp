@@ -678,51 +678,42 @@ int CAMGet(BYTE *buf)
   if (!buf)
     return -1;
 
-  // int dataSize = -1;
-
-  // spi_transaction_t t = {};
-  // t.length = sizeof(int)*8;//bit length
-  // t.tx_buffer = NULL;
-  // t.rx_buffer = &dataSize;
-
-  // while (digitalRead(PIN_CAM_SIGNAL));
-
-  // esp_err_t err = spi_device_transmit(gCamSPIHandle, &t);
-  // assert(err == ESP_OK);
-
-  // int num_segs = (dataSize / MAX_RX_SEGMENT_SIZE) + 1;
-
-  uint8_t *rx_buf = (uint8_t*)gLCDBuffer;
-
-  // for (int i = 0; i < num_segs - 1; i++)
-  // {
-  //   t = {};
-  //   t.length = MAX_RX_SEGMENT_SIZE * 8;
-  //   t.tx_buffer = NULL;
-  //   t.rx_buffer = rx_buf + i*MAX_RX_SEGMENT_SIZE;
-  //   while (digitalRead(PIN_CAM_SIGNAL));
-  //   err = spi_device_transmit(gCamSPIHandle, &t);
-  //   assert(err == ESP_OK);
-  // }
+  uint32_t dataSize = 0;
 
   spi_transaction_t t = {};
-  t.length = MAX_RX_SEGMENT_SIZE * 8;
-  t.tx_buffer = NULL;
-  t.rx_buffer = rx_buf;
+  t.length = sizeof(dataSize)*8;//bit length
+  t.rx_buffer = &dataSize;
   while (digitalRead(PIN_CAM_SIGNAL));
   esp_err_t err = spi_device_transmit(gCamSPIHandle, &t);
   assert(err == ESP_OK);
 
+  uint8_t *rx_buf = (uint8_t*)gLCDBuffer;
+  t = {};
+  t.length = MAX_RX_SEGMENT_SIZE * 8;
+  t.rx_buffer = rx_buf;
+  while (digitalRead(PIN_CAM_SIGNAL));
+  err = spi_device_transmit(gCamSPIHandle, &t);
+  assert(err == ESP_OK);
+
+  int num_segs = (dataSize / MAX_RX_SEGMENT_SIZE) + 1;
+
+  for (int i = 1; i < num_segs; i++)
+  {
+    t = {};
+    t.length = MAX_RX_SEGMENT_SIZE * 8;
+    t.rx_buffer = rx_buf + i*MAX_RX_SEGMENT_SIZE;
+    while (digitalRead(PIN_CAM_SIGNAL));
+    err = spi_device_transmit(gCamSPIHandle, &t);
+    assert(err == ESP_OK);
+  }
+
   rx_buf[0] = 0xFF;
 
-  jpgdec.openRAM(rx_buf, MAX_RX_SEGMENT_SIZE, jpegDecodeCB);
+  if (!jpgdec.openRAM(rx_buf, num_segs*MAX_RX_SEGMENT_SIZE, jpegDecodeCB))
+    return -1;
   jpgdec.setUserPointer((void*)buf);
   if (!jpgdec.decode(0, 0, 0))
-  {
-    COLOR *img = (COLOR*)buf;
-    for (int i = 0; i < QQVGA_PIXELS; i++)
-      img[i] = RED;
-  }
+    return -1;
 
   return 0;
 }
