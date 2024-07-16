@@ -8,13 +8,17 @@ typedef uint32_t COLOR;
 typedef uint8_t BYTE;
 
 //Fonts
-int HELVETICA = 0, 
-    TIMES = 0, 
-    COURIER = 0;
+enum {
+  HELVETICA, 
+  TIMES, 
+  COURIER
+};
 
 //Font variations
-int NORMAL = 0,
-    BOLD = 0;
+enum {
+  NORMAL,
+  BOLD
+};
 
 //LCD Modes
 enum {

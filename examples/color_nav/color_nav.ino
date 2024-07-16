@@ -31,6 +31,7 @@ void DemoDriveToColor()
   COLOR selected_color = RED;
   int hue_threshold = 10, sat_threshold = 10, int_threshold = 10;
   int lin_speed = 260, ang_speed = 120;
+  int MIN_DIST = 100;
 
   enum {
     D2C_PHASE_SEEKING, 
@@ -544,7 +545,6 @@ void DemoDriveToColor()
         }
 
         int dist = PSDGet(PSD_FRONT);
-        int MIN_DIST = 140;
 
         switch (phase)
         {
