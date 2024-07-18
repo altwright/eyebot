@@ -80,7 +80,7 @@ static spi_device_handle_t gCamSPIHandle;
 TouchLib gTouch(Wire, PIN_IIC_SDA, PIN_IIC_SCL, CTS820_SLAVE_ADDRESS, PIN_TOUCH_RES);
 static bool gTouchEnabled = true;
 
-static RGB565 gLCDBuffer[LCD_HEIGHT*LCD_WIDTH];
+static RGB565 *pLCDBuffer = NULL;
 
 static volatile vw_op gCurrentVWOp = VW_OP_UNDEFINED;
 
@@ -261,8 +261,8 @@ int EYEBOTInit()
   //Set default button callbacks
   ///////////////////////////////
 
-  attachInterrupt(digitalPinToInterrupt(PIN_LEFT_BUTTON), defaultLeftButtonCB, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(PIN_RIGHT_BUTTON), defaultRightButtonCB, CHANGE);
+  //attachInterrupt(digitalPinToInterrupt(PIN_LEFT_BUTTON), defaultLeftButtonCB, CHANGE);
+  //attachInterrupt(digitalPinToInterrupt(PIN_RIGHT_BUTTON), defaultRightButtonCB, CHANGE);
 
   ///////////////////
   //Initialise timer
@@ -296,7 +296,11 @@ int EYEBOTInit()
   if (!gTouch.init())
     gTouchEnabled = false;
 
-  attachInterrupt(digitalPinToInterrupt(PIN_TOUCH_INT), defaultTouchCB, CHANGE);
+  //attachInterrupt(digitalPinToInterrupt(PIN_TOUCH_INT), defaultTouchCB, CHANGE);
+
+  pLCDBuffer = (RGB565*)calloc(LCD_WIDTH*LCD_HEIGHT, sizeof(RGB565));
+  if (!pLCDBuffer)
+    return 1;
 
   return 0;
 }
@@ -308,9 +312,9 @@ int LCDPrintf(const char* format, ...)
 
   va_list arg_ptr;
   va_start(arg_ptr, format);
-  char *str_buf = (char*)gLCDBuffer;
+  char *str_buf = (char*)pLCDBuffer;
 
-  vsnprintf(str_buf, sizeof(gLCDBuffer), format, arg_ptr);
+  vsnprintf(str_buf, LCD_WIDTH*LCD_HEIGHT*sizeof(RGB565), format, arg_ptr);
 
   gTFT.print(str_buf);
 
@@ -326,9 +330,9 @@ int LCDSetPrintf(int row, int column, const char *format, ...)
 
   va_list arg_ptr;
   va_start(arg_ptr, format);
-  char *str_buf = (char*)gLCDBuffer;
+  char *str_buf = (char*)pLCDBuffer;
 
-  vsnprintf(str_buf, sizeof(gLCDBuffer), format, arg_ptr);
+  vsnprintf(str_buf, LCD_WIDTH*LCD_HEIGHT*sizeof(RGB565), format, arg_ptr);
 
   gTFT.print(str_buf);
 
@@ -512,12 +516,12 @@ int LCDImage(BYTE *img)
     {
       int i = y*QQVGA_WIDTH + x;
 
-      gLCDBuffer[i] = rgb888To565(col_img[i]);
-      rgb565SwapEndianess(&gLCDBuffer[i]);
+      pLCDBuffer[i] = rgb888To565(col_img[i]);
+      rgb565SwapEndianess(&pLCDBuffer[i]);
     }
   }
 
-  gTFT.pushRect(gImgXStart, gImgYStart, QQVGA_WIDTH, QQVGA_HEIGHT, gLCDBuffer);
+  gTFT.pushRect(gImgXStart, gImgYStart, QQVGA_WIDTH, QQVGA_HEIGHT, pLCDBuffer);
 
   return 0;
 }
@@ -535,12 +539,12 @@ int LCDImageGray(BYTE *g)
 
       COLOR col = IPPRGB2Col(g[i], g[i], g[i]);
 
-      gLCDBuffer[i] = rgb888To565(col);
-      rgb565SwapEndianess(&gLCDBuffer[i]);
+      pLCDBuffer[i] = rgb888To565(col);
+      rgb565SwapEndianess(&pLCDBuffer[i]);
     }
   }
 
-  gTFT.pushRect(gImgXStart, gImgYStart, QQVGA_WIDTH, QQVGA_HEIGHT, gLCDBuffer);
+  gTFT.pushRect(gImgXStart, gImgYStart, QQVGA_WIDTH, QQVGA_HEIGHT, pLCDBuffer);
  
   return 0;
 }
@@ -555,11 +559,11 @@ int LCDImageBinary(BYTE *b)
     for (int x = 0; x < QQVGA_WIDTH; x++)
     {
       int i = y*QQVGA_WIDTH + x;
-      gLCDBuffer[i] = b[i] ? 0xFFFF : 0;
+      pLCDBuffer[i] = b[i] ? 0xFFFF : 0;
     }
   }
 
-  gTFT.pushRect(gImgXStart, gImgYStart, QQVGA_WIDTH, QQVGA_HEIGHT, gLCDBuffer);
+  gTFT.pushRect(gImgXStart, gImgYStart, QQVGA_WIDTH, QQVGA_HEIGHT, pLCDBuffer);
  
   return 0;
 }
@@ -654,7 +658,7 @@ int CAMGet(BYTE *buf)
   if (!buf)
     return -1;
 
-  BYTE *rx_buf = (BYTE*)gLCDBuffer;
+  BYTE *rx_buf = (BYTE*)pLCDBuffer;
 
   for (int i = 0; i < CAM_NUM_IMAGE_SEGMENTS; i++)
   {
@@ -686,7 +690,7 @@ int CAMGetGray(BYTE *buf)
   if (!buf)
     return -1;
 
-  BYTE *rx_buf = (BYTE*)gLCDBuffer;
+  BYTE *rx_buf = (BYTE*)pLCDBuffer;
 
   for (int i = 0; i < CAM_NUM_IMAGE_SEGMENTS; i++)
   {
@@ -775,8 +779,8 @@ void IPSobel(BYTE* grayIn, BYTE* grayOut)
       int deltaY = grayIn[i-QQVGA_WIDTH-1] + 2*grayIn[i-QQVGA_WIDTH] + grayIn[i-QQVGA_WIDTH+1] - grayIn[i+QQVGA_WIDTH-1] - 2*grayIn[i+QQVGA_WIDTH] - grayIn[i+QQVGA_WIDTH+1];
 
       int grad = (abs(deltaX) + abs(deltaY)) / 3;
-      if (grad > 0xFF) 
-        grad = 0xFF;
+      if (grad > 255) 
+        grad = 255;
 
       grayOut[i] = (BYTE)grad;
     }

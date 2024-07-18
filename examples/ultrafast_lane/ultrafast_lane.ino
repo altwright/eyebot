@@ -1,10 +1,34 @@
 #include <eyebot.h>
+#include <math.h>
+
+#define MIN(a,b) (((a)<(b))?(a):(b))
+#define MAX(a,b) (((a)>(b))?(a):(b))
 
 typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
 
-u8 *pPatternBins = NULL;
+//!
+//! Sliding kernel accumulation has 4 cases:
+//! 1. left side out and right side in
+//! 2. left side in and right side in
+//! 3. left side in and right side out
+//! 4. left side out and right side out
+//!
+//! Small (S) kernels corresponds to kernels with radius < width; r < w
+//! Mid   (M) kernels corresponds to kernels with kernel size < width; 2r+1 < w
+//! Large (L) kernels corresponds to kernels with radius > width; r > w
+//!
+//! The fast version for (S) results in 3 loops for cases 1, 2 and 3.
+//! The fast version for (M) results in 3 loops for cases 1, 4 and 3.
+//! The fast version for (L) results in 1 loop for cases 4.
+//!
+enum Kernel
+{
+    kSmall,
+    kMid,
+    kLarge,
+};
 
 typedef struct {
   u8 slope;
@@ -12,6 +36,8 @@ typedef struct {
   u8 start;
   u8 end;
 } LinePatternInfo;
+
+u8 *pPatternBins = NULL;
 
 LinePatternInfo pPatternLookUps[110] = {
   {1, 4, 1, 4},//1
@@ -126,8 +152,368 @@ LinePatternInfo pPatternLookUps[110] = {
   {6, 2, 6, 7}//110
 };
 
-void setup() {
-  
+//! mirror without repetition index
+int mirror(const int begin, const int end, const int index)
+{
+    if(index >= begin && index < end)
+        return index;
+
+    const int length = end-begin, last = end-1, slength = length-1;
+    const int pindex = index < begin ? last-index+slength : index-begin;
+    const int repeat = pindex / slength;
+    const int mod = pindex % slength;
+    return repeat%2 ? slength-mod+begin : mod+begin;
+}
+
+//!
+//! \brief This function converts the standard deviation of 
+//! Gaussian blur into a box radius for each box blur pass. 
+//! Returns the approximate sigma value achieved with the N box blur passes.
+//!
+//! For further details please refer to :
+//! - https://www.peterkovesi.com/papers/FastGaussianSmoothing.pdf
+//!
+//! \param[out] boxes   box radiis for kernel sizes of 2*boxes[i]+1
+//! \param[in] sigma    Gaussian standard deviation
+//! \param[in] n        number of box blur pass
+//!
+float sigma_to_box_radius(int boxes[], const float sigma, const int n)  
+{
+  // ideal filter width
+  float wi = sqrtf((12*sigma*sigma/n)+1); 
+  int wl = wi; // no need std::floor  
+  if(wl%2==0) wl--;
+  int wu = wl+2;
+              
+  float mi = (12*sigma*sigma - n*wl*wl - 4*n*wl - 3*n)/(-4*wl - 4);
+  int m = mi+0.5f; // avoid std::round by adding 0.5f and cast to integer type
+              
+  for(int i=0; i<n; i++) 
+    boxes[i] = ((i < m ? wl : wu) - 1) / 2;
+
+  return sqrtf((m*wl*wl+(n-m)*wu*wu-n)/12.f);
+}
+
+//! \param[in] in           source buffer
+//! \param[in,out] out      target buffer
+//! \param[in] w            image width
+//! \param[in] h            image height
+//! \param[in] r            box dimension
+//!
+void horizontal_blur(BYTE in[], BYTE out[], int w, int h, int r)
+{
+  Kernel kernel = kSmall;
+
+  if( r < w/2 ) kernel = kSmall;
+  else if( r < w ) kernel = kMid;
+  else kernel = kLarge;
+
+  const float iarr = 1.f/(r+r+1);
+  for (int i = 0; i < h; i++)
+  {
+    const int begin = i*w;
+    const int end = begin+w; 
+    int acc = 0;
+
+    // current index, left index, right index
+    int ti = begin, li = begin-r-1, ri = begin+r;
+    switch (kernel)
+    {
+      case kLarge: // generic but slow
+      {
+        // initial accumulation
+        for(int j=li; j<ri; j++) 
+        {
+            const int id = mirror(begin, end, j); // mirrored id
+            acc += in[id];
+        }
+
+        // perform filtering
+        for(int j=0; j<w; j++, ri++, ti++, li++) 
+        { 
+            const int rid = mirror(begin, end, ri); // right mirrored id 
+            const int lid = mirror(begin, end, li); // left mirrored id
+            acc += in[rid] - in[lid];
+            out[ti] = acc*iarr + 0.5f; // fixes darkening with integer types
+        }
+        break;
+      }
+      case kMid:
+      {
+        for(int j=li; j<begin; j++) 
+        {
+            const int lid = 2 * begin - j; // mirrored id
+            acc += in[lid];
+        }
+
+        for(int j=begin; j<ri; j++) 
+        {
+            acc += in[j];
+        }
+
+        // 1. left side out and right side in
+        for(; ri<end; ri++, ti++, li++)
+        { 
+            const int lid = 2 * begin - li; // left mirrored id
+            acc += in[ri] - in[lid];
+            out[ti] = acc*iarr + 0.5f; // fixes darkening with integer types
+        }
+
+        // 4. left side out and right side out
+        for(; li<begin; ri++, ti++, li++)
+        { 
+            const int rid = 2 * end - 2 - ri;   // right mirrored id 
+            const int lid = 2 * begin - li;     // left mirrored id
+            acc += in[rid] - in[lid]; 
+            out[ti] = acc*iarr + 0.5f; // fixes darkening with integer types
+        }
+
+        // 3. left side in and right side out
+        for(; ti<end; ri++, ti++, li++)
+        {
+            const int rid = 2*end-2-ri; // right mirrored id 
+            acc += in[rid] - in[li];
+            out[ti] = acc*iarr + 0.5f; // fixes darkening with integer types
+        }
+
+        break;
+      }
+      case kSmall:
+      {
+        for(int j=li; j<begin; j++) 
+        {
+            const int lid = 2 * begin - j; // mirrored id
+            acc += in[lid];
+        }
+
+        for(int j=begin; j<ri; j++) 
+        {
+            acc += in[j];
+        }
+
+        // 1. left side out and right side in
+        for(; li<begin; ri++, ti++, li++)
+        { 
+            const int lid = 2 * begin - li; // left mirrored id
+            acc += in[ri] - in[lid];
+            out[ti] = acc*iarr + 0.5f; // fixes darkening with integer types
+        }
+
+        // 2. left side in and right side in
+        for(; ri<end; ri++, ti++, li++) 
+        { 
+            acc += in[ri] - in[li]; 
+            out[ti] = acc*iarr + 0.5f; // fixes darkening with integer types
+        }
+
+        // 3. left side in and right side out
+        for(; ti<end; ri++, ti++, li++)
+        {
+            const int rid = 2*end-2-ri; // right mirrored id 
+            acc += in[rid] - in[li];
+            out[ti] = acc*iarr + 0.5f; // fixes darkening with integer types
+        }
+
+        break;
+      }
+      default:
+        break;
+    }
+  }
+}
+
+//!
+//! \brief This function performs a 2D tranposition of an image. 
+//!
+//! The transposition is done per 
+//! block to reduce the number of cache misses and improve cache coherency for large image buffers.
+//!
+//! \param[in] in           source buffer
+//! \param[in,out] out      target buffer
+//! \param[in] w            image width
+//! \param[in] h            image height
+//!
+void flip_img(BYTE in[], BYTE out[], const int w, const int h)
+{
+  constexpr int block = 256;
+  for(int x= 0; x < w; x+= block)
+  for(int y= 0; y < h; y+= block)
+  {
+    const BYTE* p = in + y*w + x;
+    BYTE* q = out + y + x*h;
+    
+    const int blockx = MIN(w, x+block) - x;
+    const int blocky = MIN(h, y+block) - y;
+    for(int xx= 0; xx < blockx; xx++)
+    {
+      for(int yy= 0; yy < blocky; yy++)
+      {
+        for(int k= 0; k < 1; k++)
+          q[k]= p[k];
+        p += w;
+        q += 1;                    
+      }
+      p += -blocky*w + 1;
+      q += -blocky + h;
+    }
+  }
+}
+
+// Parameter in is overwritten
+void gaussian_blur(BYTE in[], BYTE out[], float sigma)
+{
+  // compute box kernel sizes
+  int boxes[3];
+  sigma_to_box_radius(boxes, sigma, 3);
+
+  // perform 3 horizontal blur passes
+  horizontal_blur(in, out, CAMWIDTH, CAMHEIGHT, boxes[0]);
+  horizontal_blur(out, in, CAMWIDTH, CAMHEIGHT, boxes[1]);
+  horizontal_blur(in, out, CAMWIDTH, CAMHEIGHT, boxes[2]);
+
+  // flip buffer
+  flip_img(out, in, CAMWIDTH, CAMHEIGHT);
+
+  // perform 3 horizontal blur passes on flipped image
+  horizontal_blur(in, out, CAMHEIGHT, CAMWIDTH, boxes[0]);
+  horizontal_blur(out, in, CAMHEIGHT, CAMWIDTH, boxes[1]);
+  horizontal_blur(in, out, CAMHEIGHT, CAMWIDTH, boxes[2]);
+
+  // flip buffer
+  flip_img(out, in, CAMHEIGHT, CAMWIDTH);
+
+  memcpy(out, in, CAMWIDTH*CAMHEIGHT*sizeof(BYTE));
+}
+
+void sobel_gradients(BYTE in[], BYTE magnitude_out[], BYTE dir_out[])
+{
+  // X Gradient Kernel
+  const int KX[3][3] = {
+    {-1, 0, 1},
+    {-2, 0, 2},
+    {-1, 0, 1}
+  };
+
+  // Y Gradient Kernel
+  const int KY[3][3] = {
+    {1, 2, 1},
+    {0, 0, 0},
+    {-1, -2, -1}
+  };
+
+  const float angle_0 = M_PI / 8,
+              angle_1 = angle_0 + M_PI / 4,
+              angle_2 = angle_1 + M_PI / 4,
+              angle_3 = angle_2 + M_PI / 4;
+
+  for (int y = 0; y < CAMHEIGHT - 2; y++)
+  for (int x = 0; x < CAMWIDTH - 2; x++)
+  {
+    int hori_sum = 0, vert_sum = 0;
+
+    for (int row = 0; row < 3; row++)
+    for (int col = 0; col < 3; col++)
+    {
+      int i = (y + row)*CAMWIDTH + (x + col);
+      hori_sum += in[i] * KX[row][col];
+      vert_sum += in[i] * KY[row][col];
+    }
+
+    int i = y*CAMWIDTH + x;
+
+    int mag = abs(hori_sum) + abs(vert_sum);//Cheap version
+    magnitude_out[i] = mag > 255 ? 255 : mag;
+
+    float angle = atan2f(vert_sum, hori_sum);
+
+    if (angle != angle) dir_out[i] = 2;
+    else
+    {
+      if (angle < 0) angle *= -1;
+
+      if (angle <= angle_0) dir_out[i] = 0;
+      else if (angle <= angle_1) dir_out[i] = 1;
+      else if (angle <= angle_2) dir_out[i] = 2;
+      else if (angle <= angle_3) dir_out[i] = 3;
+      else dir_out[i] = 0;
+    }
+  }
+}
+
+//Overwrites gray_in array
+void canny_edge_detector(BYTE gray_in[], BYTE gray_out[])
+{
+  const int MAX_VAL = 150;
+  const int MIN_VAL = 100;
+
+  //1. Denoise image (Gaussian blur)
+  gaussian_blur(gray_in, gray_out, 1.0f);
+
+  //2. Find intensity gradients (Sobel)
+  static BYTE grad_magns[QQVGA_PIXELS];
+  static BYTE grad_dirs[QQVGA_PIXELS];
+  sobel_gradients(gray_out, grad_magns, grad_dirs);
+  //sobel_gradients(gray_in, grad_magns, grad_dirs);
+
+  //3. Non-maximum Suppression
+  memset(gray_out, 0, QQVGA_PIXELS);
+  for (int y = 1; y < CAMHEIGHT - 1; y++)
+  for (int x = 1; x < CAMWIDTH - 1; x++)
+  {
+    int i = y*CAMWIDTH + x;
+
+    if (grad_magns[i] >= MIN_VAL)
+    {
+      switch (grad_dirs[i])
+      {
+        case 0:
+          gray_out[i] = grad_magns[i] > grad_magns[y*CAMWIDTH + (x-1)] && grad_magns[i] > grad_magns[y*CAMWIDTH + (x+1)] ? 0xFF : 0;
+          break;
+        case 1:
+          gray_out[i] = grad_magns[i] > grad_magns[(y+1)*CAMWIDTH + (x-1)] && grad_magns[i] > grad_magns[(y-1)*CAMWIDTH + (x+1)] ? 0xFF : 0;
+          break;
+        case 2: 
+          gray_out[i] = grad_magns[i] > grad_magns[(y-1)*CAMWIDTH + x] && grad_magns[i] > grad_magns[(y+1)*CAMWIDTH + x] ? 0xFF : 0;
+          break;
+        case 3:
+          gray_out[i] = grad_magns[i] > grad_magns[(y-1)*CAMWIDTH + (x-1)] && grad_magns[i] > grad_magns[(y+1)*CAMWIDTH + (x+1)] ? 0xFF : 0;
+          break;
+        default:
+          gray_out[i] = 0;
+          break;
+      }
+    }
+  }
+
+  //4. Hysteresis Thresholding
+  for (int y = 1; y < CAMHEIGHT - 1; y++)
+  for (int x = 1; x < CAMWIDTH - 1; x++)
+  {
+    int i = y*CAMWIDTH + x;
+
+    if (grad_magns[i] >= MIN_VAL && grad_magns[i] <= MAX_VAL)
+    {
+      if (grad_magns[(y-1)*CAMWIDTH + (x-1)] > MAX_VAL ||
+          grad_magns[(y-1)*CAMWIDTH + x] > MAX_VAL ||
+          grad_magns[(y-1)*CAMWIDTH + (x+1)] > MAX_VAL ||
+          grad_magns[y*CAMWIDTH + (x-1)] > MAX_VAL ||
+          grad_magns[y*CAMWIDTH + (x+1)] > MAX_VAL ||
+          grad_magns[(y+1)*CAMWIDTH + (x-1)] > MAX_VAL ||
+          grad_magns[(y+1)*CAMWIDTH + x] > MAX_VAL ||
+          grad_magns[(y+1)*CAMWIDTH + (x+1)] > MAX_VAL)
+      {
+        grad_magns[i] = 0xFF;
+      }
+      else
+      {
+        gray_out[i] = 0;
+      }
+    }
+  }
+}
+
+void setup() 
+{
   pPatternBins = (u8*)calloc(1 << 16, sizeof(u8));
   assert(pPatternBins);
 
@@ -241,9 +627,20 @@ void setup() {
   pPatternBins[12288] = 108;
   pPatternBins[17] = 109;
   pPatternBins[4352] = 110;
+
+  int err = EYEBOTInit();
+  assert(!err);
 }
 
-void loop() {
-  // put your main code here, to run repeatedly:
+void loop() 
+{
+  static COLOR col_img[QQVGA_PIXELS];
+  static BYTE gray_img[QQVGA_PIXELS];
 
+  CAMGet((BYTE*)col_img);
+  IPCol2Gray((BYTE*)col_img, gray_img);
+  BYTE *edge_img = (BYTE*)col_img;
+  canny_edge_detector(gray_img, edge_img);
+  LCDImageStart(5, 5, CAMWIDTH, CAMHEIGHT);
+  LCDImageGray(edge_img);
 }
