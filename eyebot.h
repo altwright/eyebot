@@ -215,7 +215,7 @@ int IPWriteFileGray(char *filename, BYTE* gray);
 // Laplace edge detection on gray image
 void IPLaplace(BYTE* grayIn, BYTE* grayOut);                   
 
-// Sobel edge detection on gray image
+// Pseudo-Sobel edge detection on gray image
 void IPSobel(BYTE* grayIn, BYTE* grayOut);                     
 
 // Transfer color to gray

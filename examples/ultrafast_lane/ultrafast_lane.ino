@@ -31,15 +31,18 @@ enum Kernel
 };
 
 typedef struct {
-  u8 slope;
-  u8 len;
-  u8 start;
-  u8 end;
+  u8 slope, len, start, end;
 } LinePatternInfo;
 
-u8 *pPatternBins = NULL;
+typedef struct {
+  u16 x1, y1, x2, y2;
+  u32 is_connected;
+} Line;
 
-LinePatternInfo pPatternLookUps[110] = {
+u8 *pPatternBins = NULL;
+u8 pBuffer[QQVGA_SIZE];
+
+const LinePatternInfo pPatternInfoLookUps[110] = {
   {1, 4, 1, 4},//1
   {2, 3, 2, 4},//2
   {8, 4, 12, 4},//3
@@ -150,6 +153,45 @@ LinePatternInfo pPatternLookUps[110] = {
   {8, 2, 8, 7},//108
   {4, 2, 4, 5},//109
   {6, 2, 6, 7}//110
+};
+
+const u8 pSlopeConnectivityLookup[8][3] = {
+  {1, 2, 8},
+  {1, 2, 3},
+  {2, 3, 4},
+  {3, 4, 5},
+  {4, 5, 6},
+  {5, 6, 7},
+  {6, 7, 8},
+  {7, 8, 1}
+};
+
+// {Current Start, Left End}
+const u8 pLeftEdgeConnectivityLookup[10][2] = {
+  {1, 4},
+  {1, 5},
+  {12, 4},
+  {12, 5},
+  {12, 6},
+  {11, 5},
+  {11, 6},
+  {11, 7},
+  {10, 6},
+  {10, 7}
+};
+
+// {Current Start, Upper End}
+const u8 pUpperEdgeConnectivityLookup[10][2] = {
+  {1, 10},
+  {1, 9},
+  {2, 10},
+  {2, 9},
+  {2, 8},
+  {3, 9},
+  {3, 8},
+  {3, 7},
+  {4, 8},
+  {4, 7}
 };
 
 //! mirror without repetition index
@@ -359,30 +401,31 @@ void flip_img(BYTE in[], BYTE out[], const int w, const int h)
   }
 }
 
-// Parameter in is overwritten
 void gaussian_blur(BYTE in[], BYTE out[], float sigma)
 {
   // compute box kernel sizes
   int boxes[3];
   sigma_to_box_radius(boxes, sigma, 3);
 
+  u8 *tmp = pBuffer;
+
   // perform 3 horizontal blur passes
   horizontal_blur(in, out, CAMWIDTH, CAMHEIGHT, boxes[0]);
-  horizontal_blur(out, in, CAMWIDTH, CAMHEIGHT, boxes[1]);
-  horizontal_blur(in, out, CAMWIDTH, CAMHEIGHT, boxes[2]);
+  horizontal_blur(out, tmp, CAMWIDTH, CAMHEIGHT, boxes[1]);
+  horizontal_blur(tmp, out, CAMWIDTH, CAMHEIGHT, boxes[2]);
 
   // flip buffer
-  flip_img(out, in, CAMWIDTH, CAMHEIGHT);
+  flip_img(out, tmp, CAMWIDTH, CAMHEIGHT);
 
   // perform 3 horizontal blur passes on flipped image
-  horizontal_blur(in, out, CAMHEIGHT, CAMWIDTH, boxes[0]);
-  horizontal_blur(out, in, CAMHEIGHT, CAMWIDTH, boxes[1]);
-  horizontal_blur(in, out, CAMHEIGHT, CAMWIDTH, boxes[2]);
+  horizontal_blur(tmp, out, CAMHEIGHT, CAMWIDTH, boxes[0]);
+  horizontal_blur(out, tmp, CAMHEIGHT, CAMWIDTH, boxes[1]);
+  horizontal_blur(tmp, out, CAMHEIGHT, CAMWIDTH, boxes[2]);
 
   // flip buffer
-  flip_img(out, in, CAMHEIGHT, CAMWIDTH);
+  flip_img(out, tmp, CAMHEIGHT, CAMWIDTH);
 
-  memcpy(out, in, CAMWIDTH*CAMHEIGHT*sizeof(BYTE));
+  memcpy(out, tmp, CAMWIDTH*CAMHEIGHT*sizeof(BYTE));
 }
 
 void sobel_gradients(BYTE in[], BYTE magnitude_out[], BYTE dir_out[])
@@ -440,20 +483,18 @@ void sobel_gradients(BYTE in[], BYTE magnitude_out[], BYTE dir_out[])
   }
 }
 
-//Overwrites gray_in array
 void canny_edge_detector(BYTE gray_in[], BYTE gray_out[])
 {
-  const int MAX_VAL = 150;
+  const int MAX_VAL = 200;
   const int MIN_VAL = 100;
 
   //1. Denoise image (Gaussian blur)
-  gaussian_blur(gray_in, gray_out, 1.0f);
+  gaussian_blur(gray_in, gray_out, 1.4f);
 
   //2. Find intensity gradients (Sobel)
-  static BYTE grad_magns[QQVGA_PIXELS];
-  static BYTE grad_dirs[QQVGA_PIXELS];
+  BYTE *grad_magns = pBuffer;
+  BYTE *grad_dirs = pBuffer + QQVGA_PIXELS;
   sobel_gradients(gray_out, grad_magns, grad_dirs);
-  //sobel_gradients(gray_in, grad_magns, grad_dirs);
 
   //3. Non-maximum Suppression
   memset(gray_out, 0, QQVGA_PIXELS);
@@ -510,6 +551,179 @@ void canny_edge_detector(BYTE gray_in[], BYTE gray_out[])
       }
     }
   }
+}
+
+void get_pixel_coords(u8 block_edge_pos, u16 block_start_x, u16 block_start_y, u16 *x, u16 *y)
+{
+  switch (block_edge_pos)
+  {
+    case 1:
+      *x = block_start_x;
+      *y = block_start_y;
+      break;
+    case 2:
+      *x = block_start_x + 1;
+      *y = block_start_y;
+      break;
+    case 3:
+      *x = block_start_x + 2;
+      *y = block_start_y;
+      break;
+    case 4:
+      *x = block_start_x + 3;
+      *y = block_start_y;
+      break;
+    case 5:
+      *x = block_start_x + 3;
+      *y = block_start_y + 1;
+      break;
+    case 6:
+      *x = block_start_x + 3;
+      *y = block_start_y + 2;
+      break;
+    case 7:
+      *x = block_start_x + 3;
+      *y = block_start_y + 3;
+      break;
+    case 8:
+      *x = block_start_x + 2;
+      *y = block_start_y + 3;
+      break;
+    case 9:
+      *x = block_start_x + 1;
+      *y = block_start_y + 3;
+      break;
+    case 10:
+      *x = block_start_x;
+      *y = block_start_y + 3;
+      break;
+    case 11:
+      *x = block_start_x;
+      *y = block_start_y + 2;
+      break;
+    case 12:
+      *x = block_start_x;
+      *y = block_start_y + 1;
+      break;
+    default:
+      break;
+  }
+}
+
+bool connect_left_lines(int current_x, int current_y, int target_x, int target_y, u8 current_pattern, u8 target_pattern, Line lines[], int lineCount)
+{
+  if (!current_pattern || !target_pattern)
+    return false;
+
+  bool connected = false;
+
+  LinePatternInfo current_pattern_info = pPatternInfoLookUps[current_pattern - 1];
+  LinePatternInfo target_pattern_info = pPatternInfoLookUps[target_pattern - 1];
+
+  bool slope_fits = false;
+  for (int i = 0; i < 3; i++)
+  {
+    if (current_pattern_info.slope == pSlopeConnectivityLookup[target_pattern_info.slope - 1][i])
+    {
+      slope_fits = true;
+      break;
+    }
+  }
+
+  bool edge_connected = false;
+  if (slope_fits)
+  {
+    for (int i = 0; i < 10; i++)
+    {
+      if (current_pattern_info.start == pLeftEdgeConnectivityLookup[i][0] && 
+          target_pattern_info.end == pLeftEdgeConnectivityLookup[i][1])
+      {
+        edge_connected = true;
+        break;
+      }
+    }
+  }
+
+  if (slope_fits && edge_connected)
+  {
+    //Find existing line
+    for (int i = 0; i < lineCount; i++)
+    {
+      u16 tail_x = (lines[i].x2 >> 2) << 2;
+      u16 tail_y = (lines[i].y2 >> 2) << 2;
+
+      if (tail_x == target_x && tail_y == target_y)
+      {
+        u16 new_x2, new_y2;
+        get_pixel_coords(current_pattern_info.end, current_x, current_y, &new_x2, &new_y2);
+        lines[i].x2 = new_x2;
+        lines[i].y2 = new_y2;
+        lines[i].is_connected = 1;
+        connected = true;
+        break;
+      }
+    }
+  }
+
+  return connected;
+}
+
+bool connect_upper_lines(int current_x, int current_y, int target_x, int target_y, u8 current_pattern, u8 target_pattern, Line lines[], int lineCount)
+{
+  if (!current_pattern || !target_pattern)
+    return false;
+
+  bool connected = false;
+
+  LinePatternInfo current_pattern_info = pPatternInfoLookUps[current_pattern - 1];
+  LinePatternInfo target_pattern_info = pPatternInfoLookUps[target_pattern - 1];
+
+  bool slope_fits = false;
+  for (int i = 0; i < 3; i++)
+  {
+    if (current_pattern_info.slope == pSlopeConnectivityLookup[target_pattern_info.slope - 1][i])
+    {
+      slope_fits = true;
+      break;
+    }
+  }
+
+  bool edge_connected = false;
+  if (slope_fits)
+  {
+    for (int i = 0; i < 10; i++)
+    {
+      if (current_pattern_info.start == pUpperEdgeConnectivityLookup[i][0] && 
+          target_pattern_info.end == pUpperEdgeConnectivityLookup[i][1])
+      {
+        edge_connected = true;
+        break;
+      }
+    }
+  }
+
+  if (slope_fits && edge_connected)
+  {
+    //Find existing line
+    for (int i = 0; i < lineCount; i++)
+    {
+      u16 tail_x = (lines[i].x2 >> 2) << 2;
+      u16 tail_y = (lines[i].y2 >> 2) << 2;
+
+      if (tail_x == target_x && tail_y == target_y)
+      {
+        u16 new_x2, new_y2;
+        get_pixel_coords(current_pattern_info.end, current_x, current_y, &new_x2, &new_y2);
+        lines[i].x2 = new_x2;
+        lines[i].y2 = new_y2;
+        lines[i].is_connected = 1;
+        connected = true;
+        break;
+      }
+    }
+  }
+
+  return connected;
 }
 
 void setup() 
@@ -636,11 +850,95 @@ void loop()
 {
   static COLOR col_img[QQVGA_PIXELS];
   static BYTE gray_img[QQVGA_PIXELS];
+  static BYTE edge_img[QQVGA_PIXELS];
 
   CAMGet((BYTE*)col_img);
   IPCol2Gray((BYTE*)col_img, gray_img);
-  BYTE *edge_img = (BYTE*)col_img;
+
   canny_edge_detector(gray_img, edge_img);
-  LCDImageStart(5, 5, CAMWIDTH, CAMHEIGHT);
-  LCDImageGray(edge_img);
+
+  //Detect lines
+  Line *lines = (Line*)pBuffer;
+  int lineCount = 0;
+  int MAX_LINE_COUNT = sizeof(pBuffer)/sizeof(Line);
+  u8 *matchedPatterns = (u8*)gray_img;
+  memset(matchedPatterns, 0, QQVGA_PIXELS);
+
+  for (int y = 0; y < CAMHEIGHT; y += 4)
+  for (int x = 0; x < CAMWIDTH; x += 4)
+  {
+    u16 pattern = 0;
+
+    for (int yy = 0; yy < 4; yy++)
+    {
+      u16 count = 0;
+      for (int xx = 0; xx < 4; xx++)
+      {
+        count++;
+        int i = (y + yy)*CAMWIDTH + (x + xx);
+
+        if (edge_img[i])
+          pattern |= 1 << ((yy+1)*4 - count);
+      }
+    }
+
+    int i = y*CAMWIDTH + x;
+    matchedPatterns[i] = pPatternBins[pattern];
+
+    if (matchedPatterns[i])
+    {
+      bool existing_line = false;
+
+      if (x > 0 && !existing_line)
+      {
+        u8 left_pattern = matchedPatterns[y*CAMWIDTH + (x - 4)];
+        if (left_pattern)
+          existing_line = connect_left_lines(x, y, (x - 4), y, matchedPatterns[i], left_pattern, lines, lineCount);
+      }
+
+      if (y > 0)
+      {
+        if (!existing_line)
+        {
+          u8 top_pattern = matchedPatterns[(y - 4)*CAMWIDTH + x];
+          if (top_pattern)
+            existing_line = connect_upper_lines(x, y, x, (y - 4), matchedPatterns[i], top_pattern, lines, lineCount);
+        }
+
+        if (x > 0 && !existing_line)
+        {
+          u8 top_left_pattern = matchedPatterns[(y - 4)*CAMWIDTH + (x - 4)];
+          if (top_left_pattern)
+            existing_line = connect_upper_lines(x, y, (x - 4), (y - 4), matchedPatterns[i], top_left_pattern, lines, lineCount);
+        }
+
+        if (x < CAMWIDTH - 4 && !existing_line)
+        {
+          u8 top_right_pattern = matchedPatterns[(y - 4)*CAMWIDTH + (x + 4)];
+          if (top_right_pattern)
+            existing_line = connect_upper_lines(x, y, (x + 4), (y - 4), matchedPatterns[i], top_right_pattern, lines, lineCount);
+        }
+      }
+
+      if (!existing_line && lineCount < MAX_LINE_COUNT)
+      {
+        LinePatternInfo pattern_info = pPatternInfoLookUps[matchedPatterns[i] - 1];
+        u16 x1, y1, x2, y2;
+        get_pixel_coords(pattern_info.start, x, y, &x1, &y1);
+        get_pixel_coords(pattern_info.end, x, y, &x2, &y2);
+        lines[lineCount] = {x1, y1, x2, y2, 0};
+        lineCount++;
+      }
+    }
+  }
+
+  LCDImageStart(5, 10 + CAMHEIGHT, CAMWIDTH, CAMHEIGHT);
+  //LCDImage((BYTE*)col_img);
+  LCDImageBinary(edge_img);
+  LCDArea(5, 5, 5 + CAMWIDTH, 5 + CAMHEIGHT, BLACK);
+  for (int i = 0; i < lineCount; i++)
+  {
+    if (lines[i].is_connected)
+      LCDLine(lines[i].x1 + 5, lines[i].y1 + 5, lines[i].x2 + 5, lines[i].y2 + 5, RED);
+  }
 }
