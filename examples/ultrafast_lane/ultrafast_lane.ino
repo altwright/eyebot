@@ -3,6 +3,7 @@
 
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
+#define INPUT_DELAY_MS 100
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -54,6 +55,9 @@ BYTE pEdgeImg[QQVGA_PIXELS];
 int gMaxLinSpeed = 170, gMaxAngSpeed = 60;
 int gLinSpeed = 0, gAngSpeed = 0;// mm/s
 Phase gPhase = PHASE_TESTING;
+int gStrongEdgeThreshold = 200;
+int gWeakEdgeThreshold = 100;
+float gDenoiseSigma = 1.2f;
 
 const LinePatternInfo pPatternInfoLookUps[110] = {
   {1, 4, 1, 4},//1
@@ -441,7 +445,7 @@ void gaussian_blur(BYTE in[], BYTE out[], int width, int height, float sigma)
   memcpy(out, tmp, width*height);
 }
 
-void sobel_gradients(BYTE in[], BYTE magnitude_out[], BYTE dir_out[])
+void sobel_gradients(BYTE in[], int width, int height, BYTE magnitude_out[], BYTE dir_out[])
 {
   // X Gradient Kernel
   const int KX[3][3] = {
@@ -462,20 +466,20 @@ void sobel_gradients(BYTE in[], BYTE magnitude_out[], BYTE dir_out[])
               angle_2 = angle_1 + M_PI / 4,
               angle_3 = angle_2 + M_PI / 4;
 
-  for (int y = 0; y < CAMHEIGHT - 2; y++)
-  for (int x = 0; x < CAMWIDTH - 2; x++)
+  for (int y = 0; y < height - 2; y++)
+  for (int x = 0; x < width - 2; x++)
   {
     int hori_sum = 0, vert_sum = 0;
 
     for (int row = 0; row < 3; row++)
     for (int col = 0; col < 3; col++)
     {
-      int i = (y + row)*CAMWIDTH + (x + col);
+      int i = (y + row)*width + (x + col);
       hori_sum += in[i] * KX[row][col];
       vert_sum += in[i] * KY[row][col];
     }
 
-    int i = y*CAMWIDTH + x;
+    int i = y*width + x;
 
     int mag = abs(hori_sum) + abs(vert_sum);//Cheap version
     magnitude_out[i] = mag > 255 ? 255 : mag;
@@ -498,16 +502,14 @@ void sobel_gradients(BYTE in[], BYTE magnitude_out[], BYTE dir_out[])
 
 void canny_edge_detector(BYTE gray_in[], BYTE gray_out[], int width, int height)
 {
-  const int MAX_VAL = 200;
-  const int MIN_VAL = 100;
-
   //1. Denoise image (Gaussian blur)
-  gaussian_blur(gray_in, gray_out, width, height, 1.4f);
+  gaussian_blur(gray_in, gray_out, width, height, gDenoiseSigma);
+  //memcpy(gray_out, gray_in, width*height);
 
   //2. Find intensity gradients (Sobel)
   BYTE *grad_magns = pBuffer;
   BYTE *grad_dirs = pBuffer + width*height;
-  sobel_gradients(gray_out, grad_magns, grad_dirs);
+  sobel_gradients(gray_out, width, height, grad_magns, grad_dirs);
 
   //3. Non-maximum Suppression
   memset(gray_out, 0, width*height);
@@ -516,7 +518,7 @@ void canny_edge_detector(BYTE gray_in[], BYTE gray_out[], int width, int height)
   {
     int i = y*width + x;
 
-    if (grad_magns[i] >= MIN_VAL)
+    if (grad_magns[i] >= gWeakEdgeThreshold)
     {
       switch (grad_dirs[i])
       {
@@ -537,8 +539,6 @@ void canny_edge_detector(BYTE gray_in[], BYTE gray_out[], int width, int height)
           break;
       }
     }
-
-    //if (gray_out[i] && (gray_out[y*width + (x-1)] || gray_out[(y-1)*width + x]) && gray_out[(y-1)*width + (x-1)]) gray_out[i] = 0;
   }
 
   //4. Hysteresis Thresholding
@@ -547,16 +547,16 @@ void canny_edge_detector(BYTE gray_in[], BYTE gray_out[], int width, int height)
   {
     int i = y*width + x;
 
-    if (grad_magns[i] >= MIN_VAL && grad_magns[i] <= MAX_VAL)
+    if (grad_magns[i] >= gWeakEdgeThreshold && grad_magns[i] <= gStrongEdgeThreshold)
     {
-      if (grad_magns[(y-1)*width + (x-1)] > MAX_VAL ||
-          grad_magns[(y-1)*width + x] > MAX_VAL ||
-          grad_magns[(y-1)*width + (x+1)] > MAX_VAL ||
-          grad_magns[y*width + (x-1)] > MAX_VAL ||
-          grad_magns[y*width + (x+1)] > MAX_VAL ||
-          grad_magns[(y+1)*width + (x-1)] > MAX_VAL ||
-          grad_magns[(y+1)*width + x] > MAX_VAL ||
-          grad_magns[(y+1)*width + (x+1)] > MAX_VAL)
+      if (grad_magns[(y-1)*width + (x-1)] > gStrongEdgeThreshold ||
+          grad_magns[(y-1)*width + x] > gStrongEdgeThreshold ||
+          grad_magns[(y-1)*width + (x+1)] > gStrongEdgeThreshold ||
+          grad_magns[y*width + (x-1)] > gStrongEdgeThreshold ||
+          grad_magns[y*width + (x+1)] > gStrongEdgeThreshold ||
+          grad_magns[(y+1)*width + (x-1)] > gStrongEdgeThreshold ||
+          grad_magns[(y+1)*width + x] > gStrongEdgeThreshold ||
+          grad_magns[(y+1)*width + (x+1)] > gStrongEdgeThreshold)
       {
         grad_magns[i] = 0xFF;
       }
@@ -770,11 +770,30 @@ void testing_screen()
 {
   bool screen_initd = false, quit = false;
 
+  const int y_row_offset = (CAMHEIGHT >> 1) + 20;
+
+  const int COLOR_X = 5,
+            COLOR_Y = 20;
+
   const int CANNY_X = 5,
-            CANNY_Y = 20;
+            CANNY_Y = COLOR_Y + (CAMHEIGHT - y_row_offset) + 20;
 
   const int LINES_X = 5,
-            LINES_Y = CANNY_Y + CAMHEIGHT + 15;
+            LINES_Y = CANNY_Y + (CAMHEIGHT - y_row_offset) + 15;
+  
+  const int WIDGET_WIDTH = 55,
+            WIDGET_HEIGHT = 30,
+            MINUS_X1 = 50,
+            MINUS_X2 = MINUS_X1 + WIDGET_WIDTH,
+            PLUS_X1 = 110,
+            PLUS_X2 = PLUS_X1 + WIDGET_WIDTH;
+  
+  const int STRONG_Y1 = 190,
+            STRONG_Y2 = STRONG_Y1 + WIDGET_HEIGHT,
+            WEAK_Y1 = 235,
+            WEAK_Y2 = WEAK_Y1 + WIDGET_HEIGHT,
+            DENOISE_Y1 = 280,
+            DENOISE_Y2 = DENOISE_Y1 + WIDGET_HEIGHT;
 
   while (!quit)
   {
@@ -783,15 +802,47 @@ void testing_screen()
       LCDClear();
       LCDSetFontSize(1);
       LCDSetColor();
+      LCDSetPrintf(COLOR_Y - 10, COLOR_X, "Raw Color Image");
       LCDSetPrintf(CANNY_Y - 10, CANNY_X, "Canny Edge Detector");
-      LCDSetPrintf(LINES_Y - 10, LINES_X, "Ultrafast Line Detector");
+      LCDSetPrintf(LINES_Y - 10, LINES_X, "\"Ultrafast\" Line Detector");
+
+      // Strong Edge Theshold Widget
+      LCDArea(MINUS_X1, STRONG_Y1, MINUS_X2, STRONG_Y2, WHITE);
+      LCDArea(MINUS_X1 + 20, STRONG_Y1 + 13, MINUS_X1 + 36, STRONG_Y1 + 17, BLACK);
+      LCDArea(PLUS_X1, STRONG_Y1, PLUS_X2, STRONG_Y2, WHITE);
+      LCDArea(PLUS_X1 + 20, STRONG_Y1 + 13, PLUS_X1 + 36, STRONG_Y1 + 17, BLACK);
+      LCDArea(PLUS_X1 + 26, STRONG_Y1 + 7, PLUS_X1 + 30, STRONG_Y1 + 23, BLACK);
+      LCDSetFontSize(1);
+      LCDSetColor();
+      LCDSetPrintf(STRONG_Y1 - 10, 5, "Strong Edge Threshold:");
+
+      // Weak Edge Threshold Widget
+      LCDArea(MINUS_X1, WEAK_Y1, MINUS_X2, WEAK_Y2, WHITE);
+      LCDArea(MINUS_X1 + 20, WEAK_Y1 + 13, MINUS_X1 + 36, WEAK_Y1 + 17, BLACK);
+      LCDArea(PLUS_X1, WEAK_Y1, PLUS_X2, WEAK_Y2, WHITE);
+      LCDArea(PLUS_X1 + 20, WEAK_Y1 + 13, PLUS_X1 + 36, WEAK_Y1 + 17, BLACK);
+      LCDArea(PLUS_X1 + 26, WEAK_Y1 + 7, PLUS_X1 + 30, WEAK_Y1 + 23, BLACK);
+      LCDSetFontSize(1);
+      LCDSetColor();
+      LCDSetPrintf(WEAK_Y1 - 10, 5, "Weak Edge Threshold:");
+
+      // Denoise Sigma Widget
+      LCDArea(MINUS_X1, DENOISE_Y1, MINUS_X2, DENOISE_Y2, WHITE);
+      LCDArea(MINUS_X1 + 20, DENOISE_Y1 + 13, MINUS_X1 + 36, DENOISE_Y1 + 17, BLACK);
+      LCDArea(PLUS_X1, DENOISE_Y1, PLUS_X2, DENOISE_Y2, WHITE);
+      LCDArea(PLUS_X1 + 20, DENOISE_Y1 + 13, PLUS_X1 + 36, DENOISE_Y1 + 17, BLACK);
+      LCDArea(PLUS_X1 + 26, DENOISE_Y1 + 7, PLUS_X1 + 30, DENOISE_Y1 + 23, BLACK);
+      LCDSetFontSize(1);
+      LCDSetColor();
+      LCDSetPrintf(DENOISE_Y1 - 10, 5, "Denoise Sigma:");
+
       screen_initd = true;
     }
 
     CAMGet((BYTE*)pColImg);
     IPCol2Gray((BYTE*)pColImg, pGrayImg);
-
-    canny_edge_detector(pGrayImg, pEdgeImg, CAMWIDTH, CAMHEIGHT);
+    BYTE* graySubImage = pGrayImg + y_row_offset*CAMWIDTH;
+    canny_edge_detector(graySubImage, pEdgeImg, CAMWIDTH, CAMHEIGHT - y_row_offset);
 
     //Detect lines
     Line *lines = (Line*)pBuffer;
@@ -800,7 +851,7 @@ void testing_screen()
     u8 *matchedPatterns = (u8*)pGrayImg;
     memset(matchedPatterns, 0, QQVGA_PIXELS);
 
-    for (int y = 0; y < CAMHEIGHT; y += 4)
+    for (int y = 0; y < CAMHEIGHT - y_row_offset; y += 4)
     for (int x = 0; x < CAMWIDTH; x += 4)
     {
       u16 pattern = 0;
@@ -868,13 +919,98 @@ void testing_screen()
       }
     }
 
-    LCDImageStart(CANNY_X, CANNY_Y, 0, 0);
-    LCDImageBinary(pEdgeImg);
-    LCDArea(LINES_X, LINES_Y, LINES_X + CAMWIDTH, LINES_Y + CAMHEIGHT, BLACK);
+    LCDImageStart(COLOR_X, COLOR_Y, CAMWIDTH, CAMHEIGHT - y_row_offset);
+    COLOR* colorSubImage = pColImg + y_row_offset*CAMWIDTH;
+    LCDImage((BYTE*)colorSubImage);
+    LCDImageStart(CANNY_X, CANNY_Y, CAMWIDTH, CAMHEIGHT - y_row_offset);
+    //LCDImageBinary(pEdgeImg);
+    LCDImageGray(pEdgeImg);
+    LCDArea(LINES_X, LINES_Y, LINES_X + CAMWIDTH, LINES_Y + CAMHEIGHT - y_row_offset, BLACK);
     for (int i = 0; i < lineCount; i++)
     {
-      if (lines[i].is_connected)
+      //if (lines[i].is_connected)
         LCDLine(lines[i].x1 + LINES_X, lines[i].y1 + LINES_Y, lines[i].x2 + LINES_X, lines[i].y2 + LINES_Y, RED);
+    }
+
+    /*LCDLine(CANNY_X, CANNY_Y + (CAMHEIGHT >> 1) + 20, CANNY_X + CAMWIDTH, CANNY_Y + (CAMHEIGHT >> 1) + 20, RED);
+    LCDLine(CANNY_X + (CAMWIDTH >> 1) - 20, CANNY_Y + (CAMHEIGHT >> 1) + 20, CANNY_X + (CAMWIDTH >> 1) - 20, CANNY_Y + CAMHEIGHT, RED);
+    LCDLine(CANNY_X + (CAMWIDTH >> 1) + 20, CANNY_Y + (CAMHEIGHT >> 1) + 20, CANNY_X + (CAMWIDTH >> 1) + 20, CANNY_Y + CAMHEIGHT, RED);*/
+
+    const int VAL_X = 2, 
+              VAL_Y = 7;
+    LCDSetColor();
+    LCDSetFontSize(2);
+    LCDSetPrintf(STRONG_Y1 + VAL_Y, VAL_X, "%d ", gStrongEdgeThreshold);
+    LCDSetPrintf(WEAK_Y1 + VAL_Y, VAL_X, "%d ", gWeakEdgeThreshold);
+    LCDSetPrintf(DENOISE_Y1 + VAL_Y, VAL_X, "%.1f ", gDenoiseSigma);
+
+    int t_x, t_y;
+    KEYReadXY(&t_x, &t_y);
+
+    if (t_x >= MINUS_X1 && t_x <= MINUS_X2)
+    {
+      if (t_y >= STRONG_Y1 && t_y <= STRONG_Y2)
+      {
+        gStrongEdgeThreshold -= 10;
+        if (gStrongEdgeThreshold < 0) gStrongEdgeThreshold = 0;
+        
+        LCDArea(MINUS_X1 + 20, STRONG_Y1 + 13, MINUS_X1 + 36, STRONG_Y1 + 17, RED);
+        delay(INPUT_DELAY_MS);
+        LCDArea(MINUS_X1 + 20, STRONG_Y1 + 13, MINUS_X1 + 36, STRONG_Y1 + 17, BLACK);
+      }
+      else if (t_y >= WEAK_Y1 && t_y <= WEAK_Y2)
+      {
+        gWeakEdgeThreshold -= 10;
+        if (gWeakEdgeThreshold < 0) gWeakEdgeThreshold = 0;
+        
+        LCDArea(MINUS_X1 + 20, WEAK_Y1 + 13, MINUS_X1 + 36, WEAK_Y1 + 17, RED);
+        delay(INPUT_DELAY_MS);
+        LCDArea(MINUS_X1 + 20, WEAK_Y1 + 13, MINUS_X1 + 36, WEAK_Y1 + 17, BLACK);
+      }
+      else if (t_y >= DENOISE_Y1 && t_y <= DENOISE_Y2)
+      {
+        gDenoiseSigma -= 0.1f;
+        if (gDenoiseSigma < 0.0f) gDenoiseSigma = 0.0f;
+        
+        LCDArea(MINUS_X1 + 20, DENOISE_Y1 + 13, MINUS_X1 + 36, DENOISE_Y1 + 17, RED);
+        delay(INPUT_DELAY_MS);
+        LCDArea(MINUS_X1 + 20, DENOISE_Y1 + 13, MINUS_X1 + 36, DENOISE_Y1 + 17, BLACK);
+      }
+    }
+    else if (t_x >= PLUS_X1 && t_x <= PLUS_X2)
+    {
+      if (t_y >= STRONG_Y1 && t_y <= STRONG_Y2)
+      {
+        gStrongEdgeThreshold += 10;
+        if (gStrongEdgeThreshold > 255) gStrongEdgeThreshold = 255;
+
+        LCDArea(PLUS_X1 + 20, STRONG_Y1 + 13, PLUS_X1 + 36, STRONG_Y1 + 17, RED);
+        LCDArea(PLUS_X1 + 26, STRONG_Y1 + 7, PLUS_X1 + 30, STRONG_Y1 + 23, RED);
+        delay(INPUT_DELAY_MS);
+        LCDArea(PLUS_X1 + 20, STRONG_Y1 + 13, PLUS_X1 + 36, STRONG_Y1 + 17, BLACK);
+        LCDArea(PLUS_X1 + 26, STRONG_Y1 + 7, PLUS_X1 + 30, STRONG_Y1 + 23, BLACK);
+      }
+      else if (t_y >= WEAK_Y1 && t_y <= WEAK_Y2)
+      {
+        gWeakEdgeThreshold += 10;
+        if (gWeakEdgeThreshold > 255) gWeakEdgeThreshold = 255; 
+
+        LCDArea(PLUS_X1 + 20, WEAK_Y1 + 13, PLUS_X1 + 36, WEAK_Y1 + 17, RED);
+        LCDArea(PLUS_X1 + 26, WEAK_Y1 + 7, PLUS_X1 + 30, WEAK_Y1 + 23, RED);
+        delay(INPUT_DELAY_MS);
+        LCDArea(PLUS_X1 + 20, WEAK_Y1 + 13, PLUS_X1 + 36, WEAK_Y1 + 17, BLACK);
+        LCDArea(PLUS_X1 + 26, WEAK_Y1 + 7, PLUS_X1 + 30, WEAK_Y1 + 23, BLACK);
+      }
+      else if (t_y >= DENOISE_Y1 && t_y <= DENOISE_Y2)
+      {
+        gDenoiseSigma += 0.1f;
+
+        LCDArea(PLUS_X1 + 20, DENOISE_Y1 + 13, PLUS_X1 + 36, DENOISE_Y1 + 17, RED);
+        LCDArea(PLUS_X1 + 26, DENOISE_Y1 + 7, PLUS_X1 + 30, DENOISE_Y1 + 23, RED);
+        delay(INPUT_DELAY_MS);
+        LCDArea(PLUS_X1 + 20, DENOISE_Y1 + 13, PLUS_X1 + 36, DENOISE_Y1 + 17, BLACK);
+        LCDArea(PLUS_X1 + 26, DENOISE_Y1 + 7, PLUS_X1 + 30, DENOISE_Y1 + 23, BLACK);
+      }
     }
   }
 }

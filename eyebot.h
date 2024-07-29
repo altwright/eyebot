@@ -119,7 +119,7 @@ int LCDCircle(int x1, int y1, int radius, COLOR col, int fill = 1);
 int LCDImageSize(int t);
 
 // Define image start position and size (default 0,0; max_x, max_y)
-int LCDImageStart(int x, int y, int xs, int ys);
+int LCDImageStart(int x, int y, int xs = 160, int ys = 120);
 
 // Print color image at screen start pos. and size
 int LCDImage(BYTE *img);

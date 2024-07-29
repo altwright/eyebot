@@ -105,7 +105,10 @@ static input_callback pLeftButtonCB = NULL;
 static input_callback pRightButtonCB = NULL;
 static input_callback pTouchCB = NULL;
 
-static int gImgXStart, gImgYStart;
+static int gImgXStart = 0, 
+            gImgYStart = 0, 
+            gImgWidth = QQVGA_WIDTH, 
+            gImgHeight = QQVGA_HEIGHT;
 
 static RGB565 rgb888To565(COLOR col)
 {
@@ -499,6 +502,8 @@ int LCDImageStart(int x, int y, int xs, int ys)
 
   gImgXStart = x;
   gImgYStart = y;
+  gImgWidth = xs < 0 || xs > QQVGA_WIDTH ? QQVGA_WIDTH : xs;
+  gImgHeight = ys < 0 || ys > QQVGA_HEIGHT ? QQVGA_HEIGHT : ys;
 
   return 0;
 }
@@ -510,18 +515,18 @@ int LCDImage(BYTE *img)
   
   COLOR *col_img = (COLOR*)img;
 
-  for (int y = 0; y < QQVGA_HEIGHT; y++)
+  for (int y = 0; y < gImgHeight; y++)
   {
-    for (int x = 0; x < QQVGA_WIDTH; x++)
+    for (int x = 0; x < gImgWidth; x++)
     {
-      int i = y*QQVGA_WIDTH + x;
+      int i = y*gImgWidth + x;
 
       pLCDBuffer[i] = rgb888To565(col_img[i]);
       rgb565SwapEndianess(&pLCDBuffer[i]);
     }
   }
 
-  gTFT.pushRect(gImgXStart, gImgYStart, QQVGA_WIDTH, QQVGA_HEIGHT, pLCDBuffer);
+  gTFT.pushRect(gImgXStart, gImgYStart, gImgWidth, gImgHeight, pLCDBuffer);
 
   return 0;
 }
@@ -531,11 +536,11 @@ int LCDImageGray(BYTE *g)
   if (!g)
     return -1;
 
-  for (int y = 0; y < QQVGA_HEIGHT; y++)
+  for (int y = 0; y < gImgHeight; y++)
   {
-    for (int x = 0; x < QQVGA_WIDTH; x++)
+    for (int x = 0; x < gImgWidth; x++)
     {
-      int i = y*QQVGA_WIDTH + x;
+      int i = y*gImgWidth + x;
 
       COLOR col = IPPRGB2Col(g[i], g[i], g[i]);
 
@@ -544,7 +549,7 @@ int LCDImageGray(BYTE *g)
     }
   }
 
-  gTFT.pushRect(gImgXStart, gImgYStart, QQVGA_WIDTH, QQVGA_HEIGHT, pLCDBuffer);
+  gTFT.pushRect(gImgXStart, gImgYStart, gImgWidth, gImgHeight, pLCDBuffer);
  
   return 0;
 }
@@ -554,23 +559,23 @@ int LCDImageBinary(BYTE *b)
   if (!b)
     return -1;
 
-  for (int y = 0; y < QQVGA_HEIGHT; y++)
+  for (int y = 0; y < gImgHeight; y++)
   {
-    for (int x = 0; x < QQVGA_WIDTH; x++)
+    for (int x = 0; x < gImgWidth; x++)
     {
-      int i = y*QQVGA_WIDTH + x;
+      int i = y*gImgWidth + x;
       pLCDBuffer[i] = b[i] ? 0xFFFF : 0;
     }
   }
 
-  gTFT.pushRect(gImgXStart, gImgYStart, QQVGA_WIDTH, QQVGA_HEIGHT, pLCDBuffer);
+  gTFT.pushRect(gImgXStart, gImgYStart, gImgWidth, gImgHeight, pLCDBuffer);
  
   return 0;
 }
 
 int LCDRefresh(void)
 {
-  return -1;
+  return 0;
 }
 
 int KEYGet(void)
