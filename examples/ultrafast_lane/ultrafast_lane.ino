@@ -4,6 +4,7 @@
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
 #define INPUT_DELAY_MS 100
+#define MIN_LINE_LEN 6
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -43,7 +44,7 @@ typedef struct {
 
 typedef struct {
   u16 x1, y1, x2, y2;
-  u32 is_connected;
+  u32 len;
 } Line;
 
 u8 *pPatternBins = NULL;
@@ -52,12 +53,12 @@ COLOR pColImg[QQVGA_PIXELS];
 BYTE pGrayImg[QQVGA_PIXELS];
 BYTE pEdgeImg[QQVGA_PIXELS];
 
-int gMaxLinSpeed = 170, gMaxAngSpeed = 60;
-int gLinSpeed = 0, gAngSpeed = 0;// mm/s
-Phase gPhase = PHASE_TESTING;
+int gMaxLinSpeed = 130, gMaxAngSpeed = 30;
+Phase gPhase = PHASE_SETTINGS;
 int gStrongEdgeThreshold = 200;
 int gWeakEdgeThreshold = 100;
-float gDenoiseSigma = 1.2f;
+float gDenoiseSigma = 1.6f;
+int gLCDWidth = -1, gLCDHeight = -1;
 
 const LinePatternInfo pPatternInfoLookUps[110] = {
   {1, 4, 1, 4},//1
@@ -688,7 +689,7 @@ bool connect_left_lines(int current_x, int current_y, int target_x, int target_y
         get_pixel_coords(current_pattern_info.end, current_x, current_y, &new_x2, &new_y2);
         lines[i].x2 = new_x2;
         lines[i].y2 = new_y2;
-        lines[i].is_connected = 1;
+        lines[i].len += current_pattern_info.len;
         connected = true;
         break;
       }
@@ -746,7 +747,7 @@ bool connect_upper_lines(int current_x, int current_y, int target_x, int target_
         get_pixel_coords(current_pattern_info.end, current_x, current_y, &new_x2, &new_y2);
         lines[i].x2 = new_x2;
         lines[i].y2 = new_y2;
-        lines[i].is_connected = 1;
+        lines[i].len += current_pattern_info.len;
         connected = true;
         break;
       }
@@ -756,13 +757,222 @@ bool connect_upper_lines(int current_x, int current_y, int target_x, int target_
   return connected;
 }
 
+int ultrafast_line_detector(int width, int height, int max_line_count, Line lines[])
+{
+  int lineCount = 0;
+  u8 *matchedPatterns = (u8*)pGrayImg;
+
+  for (int y = 0; y < height; y += 4)
+  for (int x = 0; x < width; x += 4)
+  {
+    u16 pattern = 0;
+
+    for (int yy = 0; yy < 4; yy++)
+    {
+      u16 count = 0;
+      for (int xx = 0; xx < 4; xx++)
+      {
+        count++;
+        int i = (y + yy)*width + (x + xx);
+
+        if (pEdgeImg[i])
+          pattern |= 1 << ((yy+1)*4 - count);
+      }
+    }
+
+    int i = y*width + x;
+    matchedPatterns[i] = pPatternBins[pattern];
+
+    if (matchedPatterns[i])
+    {
+      bool existing_line = false;
+
+      if (x > 0 && !existing_line)
+      {
+        u8 left_pattern = matchedPatterns[y*width + (x - 4)];
+        if (left_pattern)
+          existing_line = connect_left_lines(x, y, (x - 4), y, matchedPatterns[i], left_pattern, lines, lineCount);
+      }
+
+      if (y > 0)
+      {
+        if (!existing_line)
+        {
+          u8 top_pattern = matchedPatterns[(y - 4)*width + x];
+          if (top_pattern)
+            existing_line = connect_upper_lines(x, y, x, (y - 4), matchedPatterns[i], top_pattern, lines, lineCount);
+        }
+
+        if (x > 0 && !existing_line)
+        {
+          u8 top_left_pattern = matchedPatterns[(y - 4)*width + (x - 4)];
+          if (top_left_pattern)
+            existing_line = connect_upper_lines(x, y, (x - 4), (y - 4), matchedPatterns[i], top_left_pattern, lines, lineCount);
+        }
+
+        if (x < width - 4 && !existing_line)
+        {
+          u8 top_right_pattern = matchedPatterns[(y - 4)*width + (x + 4)];
+          if (top_right_pattern)
+            existing_line = connect_upper_lines(x, y, (x + 4), (y - 4), matchedPatterns[i], top_right_pattern, lines, lineCount);
+        }
+      }
+
+      if (!existing_line && lineCount < max_line_count)
+      {
+        LinePatternInfo pattern_info = pPatternInfoLookUps[matchedPatterns[i] - 1];
+        u16 x1, y1, x2, y2;
+        get_pixel_coords(pattern_info.start, x, y, &x1, &y1);
+        get_pixel_coords(pattern_info.end, x, y, &x2, &y2);
+        lines[lineCount] = {x1, y1, x2, y2, pattern_info.len};
+        lineCount++;
+      }
+    }
+  }
+
+  return lineCount;
+}
+
 void settings_screen()
 {
   bool screen_initd = false, quit = false;
 
+  const int MINUS_X1 = 5,
+            MINUS_X2 = MINUS_X1 + 40,
+            PLUS_X1 = 125,
+            PLUS_X2 = PLUS_X1 + 40;
+
+  const int LIN_Y1 = 20,
+            LIN_Y2 = LIN_Y1 + 40;
+
+  const int ANG_Y1 = LIN_Y1 + 62,
+            ANG_Y2 = ANG_Y1 + 40;
+  
+  const int TEST_X1 = 5,
+            TEST_X2 = 165,
+            TEST_Y1 = ANG_Y1 + 52,
+            TEST_Y2 = TEST_Y1 + 80;
+  
+  const int START_X1 = 5,
+            START_X2 = 165,
+            START_Y1 = TEST_Y2 + 10,
+            START_Y2 = START_Y1 + 80;
+
   while (!quit)
   {
+    if (!screen_initd)
+    {
+      LCDClear();
 
+      // Max Linear Speed Widget
+      LCDSetFontSize(1);
+      LCDSetColor();
+      LCDSetPrintf(5, 5, "Max Linear Speed (mm/s)");
+      // Decrease
+      LCDArea(MINUS_X1, LIN_Y1, MINUS_X2, LIN_Y2, WHITE);
+      LCDArea(MINUS_X1 + 10, LIN_Y1 + 18, MINUS_X1 + 30, LIN_Y1 + 23, BLACK);
+      // Increase
+      LCDArea(PLUS_X1, LIN_Y1, PLUS_X2, LIN_Y2, WHITE);
+      LCDArea(PLUS_X1 + 10, LIN_Y1 + 18, PLUS_X1 + 30, LIN_Y1 + 23, BLACK);
+      LCDArea(PLUS_X1 + 18, LIN_Y1 + 10, PLUS_X1 + 23, LIN_Y1 + 32, BLACK);
+
+      // Max Angular Speed Widget
+      LCDSetFontSize(1);
+      LCDSetColor();
+      LCDSetPrintf(67, 5, "Max Angular Speed (deg./s)");
+      // Decrease
+      LCDArea(MINUS_X1, ANG_Y1, MINUS_X2, ANG_Y2, WHITE);
+      LCDArea(MINUS_X1 + 10, ANG_Y1 + 18, MINUS_X1 + 30, ANG_Y1 + 23, BLACK);
+      // Increase
+      LCDArea(PLUS_X1, ANG_Y1, PLUS_X2, ANG_Y2, WHITE);
+      LCDArea(PLUS_X1 + 10, ANG_Y1 + 18, PLUS_X1 + 30, ANG_Y1 + 23, BLACK);
+      LCDArea(PLUS_X1 + 18, ANG_Y1 + 10, PLUS_X1 + 23, ANG_Y1 + 32, BLACK);
+
+      LCDSetFontSize(3);
+      LCDSetColor(BLACK, WHITE);
+      // Testing button
+      LCDArea(TEST_X1, TEST_Y1, TEST_X2, TEST_Y2, WHITE);
+      LCDSetPrintf(TEST_Y1 + 30, TEST_X1 + 46, "TEST");
+
+      // Start button
+      LCDArea(START_X1, START_Y1, START_X2, START_Y2, WHITE);
+      LCDSetPrintf(START_Y1 + 30, START_X1 + 38, "START");
+
+      screen_initd = true;
+    }
+
+    LCDSetFontSize(2);
+    LCDSetColor();
+
+    LCDSetPrintf(LIN_Y1 + 14, MINUS_X2 + 5, "%d ", gMaxLinSpeed);
+    LCDSetPrintf(ANG_Y1 + 14, MINUS_X2 + 5, "%d ", gMaxAngSpeed);
+
+    int tx, ty;
+    KEYReadXY(&tx, &ty);
+    if (tx >= MINUS_X1 && tx <= MINUS_X2)
+    {
+      if (ty >= LIN_Y1 && ty <= LIN_Y2)
+      {
+        gMaxLinSpeed -= 10;
+        if (gMaxLinSpeed < 0) gMaxLinSpeed = 0;
+        
+        LCDArea(MINUS_X1 + 10, LIN_Y1 + 18, MINUS_X1 + 30, LIN_Y1 + 23, RED);
+        delay(INPUT_DELAY_MS);
+        LCDArea(MINUS_X1 + 10, LIN_Y1 + 18, MINUS_X1 + 30, LIN_Y1 + 23, BLACK);
+      }
+      else if (ty >= ANG_Y1 && ty <= ANG_Y2)
+      {
+        gMaxAngSpeed -= 10;
+        if (gMaxAngSpeed < 0) gMaxAngSpeed = 0;
+
+        LCDArea(MINUS_X1 + 10, ANG_Y1 + 18, MINUS_X1 + 30, ANG_Y1 + 23, RED);
+        delay(INPUT_DELAY_MS);
+        LCDArea(MINUS_X1 + 10, ANG_Y1 + 18, MINUS_X1 + 30, ANG_Y1 + 23, BLACK);
+      }
+    }
+    else if (tx >= PLUS_X1 && tx <= PLUS_X2)
+    {
+      if (ty >= LIN_Y1 && ty <= LIN_Y2)
+      {
+        gMaxLinSpeed += 10;
+
+        LCDArea(PLUS_X1 + 10, LIN_Y1 + 18, PLUS_X1 + 30, LIN_Y1 + 23, RED);
+        LCDArea(PLUS_X1 + 18, LIN_Y1 + 10, PLUS_X1 + 23, LIN_Y1 + 32, RED);
+        delay(INPUT_DELAY_MS);
+        LCDArea(PLUS_X1 + 10, LIN_Y1 + 18, PLUS_X1 + 30, LIN_Y1 + 23, BLACK);
+        LCDArea(PLUS_X1 + 18, LIN_Y1 + 10, PLUS_X1 + 23, LIN_Y1 + 32, BLACK);
+      }
+      else if (ty >= ANG_Y1 && ty <= ANG_Y2)
+      {
+        gMaxAngSpeed += 10;
+
+        LCDArea(PLUS_X1 + 10, ANG_Y1 + 18, PLUS_X1 + 30, ANG_Y1 + 23, RED);
+        LCDArea(PLUS_X1 + 18, ANG_Y1 + 10, PLUS_X1 + 23, ANG_Y1 + 32, RED);
+        delay(INPUT_DELAY_MS);
+        LCDArea(PLUS_X1 + 10, ANG_Y1 + 18, PLUS_X1 + 30, ANG_Y1 + 23, BLACK);
+        LCDArea(PLUS_X1 + 18, ANG_Y1 + 10, PLUS_X1 + 23, ANG_Y1 + 32, BLACK);
+      }
+    }
+    else if (tx >= TEST_X1 && tx <= TEST_X2 && ty >= TEST_Y1 && ty <= TEST_Y2)
+    {
+      quit = true;
+      gPhase = PHASE_TESTING;
+      LCDSetFontSize(3);
+      LCDSetColor(RED, WHITE);
+      LCDSetPrintf(TEST_Y1 + 30, TEST_X1 + 46, "TEST");
+      delay(INPUT_DELAY_MS);
+      continue;
+    }
+    else if (tx >= START_X1 && tx <= START_X2 && ty >= START_Y1 && ty <= START_Y2)
+    {
+      quit = true;
+      gPhase = PHASE_NAVIGATING;
+      LCDSetFontSize(3);
+      LCDSetColor(RED, WHITE);
+      LCDSetPrintf(START_Y1 + 30, START_X1 + 38, "START");
+      delay(INPUT_DELAY_MS);
+      continue;
+    }
   }
 }
 
@@ -795,6 +1005,14 @@ void testing_screen()
             DENOISE_Y1 = 280,
             DENOISE_Y2 = DENOISE_Y1 + WIDGET_HEIGHT;
 
+  const int LB_X1 = 0,
+            LB_X2 = LB_X1 + 38,
+            LB_Y1 = gLCDHeight - 12,
+            LB_Y2 = gLCDHeight;
+  
+  const int NULL_X1 = (CAMWIDTH >> 1) - 20,
+            NULL_X2 = NULL_X1 + 40;
+
   while (!quit)
   {
     if (!screen_initd)
@@ -802,9 +1020,15 @@ void testing_screen()
       LCDClear();
       LCDSetFontSize(1);
       LCDSetColor();
-      LCDSetPrintf(COLOR_Y - 10, COLOR_X, "Raw Color Image");
+      LCDSetPrintf(COLOR_Y - 10, COLOR_X, "Raw Color Image (Y = %d)", y_row_offset);
       LCDSetPrintf(CANNY_Y - 10, CANNY_X, "Canny Edge Detector");
       LCDSetPrintf(LINES_Y - 10, LINES_X, "\"Ultrafast\" Line Detector");
+
+      //Left Button
+      LCDArea(LB_X1, LB_Y1, LB_X2, LB_Y2, WHITE);
+      LCDSetColor(BLACK, WHITE);
+      LCDSetFontSize(1);
+      LCDSetPrintf(LB_Y1 + 2, LB_X1 + 7, "EXIT");
 
       // Strong Edge Theshold Widget
       LCDArea(MINUS_X1, STRONG_Y1, MINUS_X2, STRONG_Y2, WHITE);
@@ -846,78 +1070,10 @@ void testing_screen()
 
     //Detect lines
     Line *lines = (Line*)pBuffer;
-    int lineCount = 0;
     int MAX_LINE_COUNT = sizeof(pBuffer)/sizeof(Line);
     u8 *matchedPatterns = (u8*)pGrayImg;
-    memset(matchedPatterns, 0, QQVGA_PIXELS);
 
-    for (int y = 0; y < CAMHEIGHT - y_row_offset; y += 4)
-    for (int x = 0; x < CAMWIDTH; x += 4)
-    {
-      u16 pattern = 0;
-
-      for (int yy = 0; yy < 4; yy++)
-      {
-        u16 count = 0;
-        for (int xx = 0; xx < 4; xx++)
-        {
-          count++;
-          int i = (y + yy)*CAMWIDTH + (x + xx);
-
-          if (pEdgeImg[i])
-            pattern |= 1 << ((yy+1)*4 - count);
-        }
-      }
-
-      int i = y*CAMWIDTH + x;
-      matchedPatterns[i] = pPatternBins[pattern];
-
-      if (matchedPatterns[i])
-      {
-        bool existing_line = false;
-
-        if (x > 0 && !existing_line)
-        {
-          u8 left_pattern = matchedPatterns[y*CAMWIDTH + (x - 4)];
-          if (left_pattern)
-            existing_line = connect_left_lines(x, y, (x - 4), y, matchedPatterns[i], left_pattern, lines, lineCount);
-        }
-
-        if (y > 0)
-        {
-          if (!existing_line)
-          {
-            u8 top_pattern = matchedPatterns[(y - 4)*CAMWIDTH + x];
-            if (top_pattern)
-              existing_line = connect_upper_lines(x, y, x, (y - 4), matchedPatterns[i], top_pattern, lines, lineCount);
-          }
-
-          if (x > 0 && !existing_line)
-          {
-            u8 top_left_pattern = matchedPatterns[(y - 4)*CAMWIDTH + (x - 4)];
-            if (top_left_pattern)
-              existing_line = connect_upper_lines(x, y, (x - 4), (y - 4), matchedPatterns[i], top_left_pattern, lines, lineCount);
-          }
-
-          if (x < CAMWIDTH - 4 && !existing_line)
-          {
-            u8 top_right_pattern = matchedPatterns[(y - 4)*CAMWIDTH + (x + 4)];
-            if (top_right_pattern)
-              existing_line = connect_upper_lines(x, y, (x + 4), (y - 4), matchedPatterns[i], top_right_pattern, lines, lineCount);
-          }
-        }
-
-        if (!existing_line && lineCount < MAX_LINE_COUNT)
-        {
-          LinePatternInfo pattern_info = pPatternInfoLookUps[matchedPatterns[i] - 1];
-          u16 x1, y1, x2, y2;
-          get_pixel_coords(pattern_info.start, x, y, &x1, &y1);
-          get_pixel_coords(pattern_info.end, x, y, &x2, &y2);
-          lines[lineCount] = {x1, y1, x2, y2, 0};
-          lineCount++;
-        }
-      }
-    }
+    int lineCount = ultrafast_line_detector(CAMWIDTH, CAMHEIGHT - y_row_offset, MAX_LINE_COUNT, lines);
 
     LCDImageStart(COLOR_X, COLOR_Y, CAMWIDTH, CAMHEIGHT - y_row_offset);
     COLOR* colorSubImage = pColImg + y_row_offset*CAMWIDTH;
@@ -928,13 +1084,9 @@ void testing_screen()
     LCDArea(LINES_X, LINES_Y, LINES_X + CAMWIDTH, LINES_Y + CAMHEIGHT - y_row_offset, BLACK);
     for (int i = 0; i < lineCount; i++)
     {
-      //if (lines[i].is_connected)
+      if (lines[i].len >= MIN_LINE_LEN && (lines[i].x2 < NULL_X1 || lines[i].x2 > NULL_X2))
         LCDLine(lines[i].x1 + LINES_X, lines[i].y1 + LINES_Y, lines[i].x2 + LINES_X, lines[i].y2 + LINES_Y, RED);
     }
-
-    /*LCDLine(CANNY_X, CANNY_Y + (CAMHEIGHT >> 1) + 20, CANNY_X + CAMWIDTH, CANNY_Y + (CAMHEIGHT >> 1) + 20, RED);
-    LCDLine(CANNY_X + (CAMWIDTH >> 1) - 20, CANNY_Y + (CAMHEIGHT >> 1) + 20, CANNY_X + (CAMWIDTH >> 1) - 20, CANNY_Y + CAMHEIGHT, RED);
-    LCDLine(CANNY_X + (CAMWIDTH >> 1) + 20, CANNY_Y + (CAMHEIGHT >> 1) + 20, CANNY_X + (CAMWIDTH >> 1) + 20, CANNY_Y + CAMHEIGHT, RED);*/
 
     const int VAL_X = 2, 
               VAL_Y = 7;
@@ -943,6 +1095,18 @@ void testing_screen()
     LCDSetPrintf(STRONG_Y1 + VAL_Y, VAL_X, "%d ", gStrongEdgeThreshold);
     LCDSetPrintf(WEAK_Y1 + VAL_Y, VAL_X, "%d ", gWeakEdgeThreshold);
     LCDSetPrintf(DENOISE_Y1 + VAL_Y, VAL_X, "%.1f ", gDenoiseSigma);
+
+    int button = KEYRead();
+    if (button & KEY1)
+    {
+      quit = true;
+      gPhase = PHASE_SETTINGS;
+      LCDSetFontSize(1);
+      LCDSetColor(RED, WHITE);
+      LCDSetPrintf(LB_Y1 + 2, LB_X1 + 7, "EXIT");
+      delay(INPUT_DELAY_MS);
+      continue;
+    }
 
     int t_x, t_y;
     KEYReadXY(&t_x, &t_y);
@@ -1017,12 +1181,268 @@ void testing_screen()
 
 void navigation_screen()
 {
-  bool screen_initd = false, quit = false;
+  bool quit = false, collision = false;
+
+  const int MIN_DIST = 100;
+
+  const int y_row_offset = (CAMHEIGHT >> 1) + 20;
+
+  const int COLOR_X = 5,
+            COLOR_Y = 5;
+
+  const int CANNY_X = 5,
+            CANNY_Y = COLOR_Y + (CAMHEIGHT - y_row_offset) + 5;
+
+  const int LINES_X = 5,
+            LINES_Y = CANNY_Y + (CAMHEIGHT - y_row_offset) + 5;
+  
+  const int width = CAMWIDTH,
+            height =  CAMHEIGHT - y_row_offset;
+  
+  const int NULL_X1 = (CAMWIDTH >> 1) - 20,
+            NULL_X2 = NULL_X1 + 40;
+  
+  int screen_width = -1, screen_height = -1;
+  LCDGetSize(&screen_width, &screen_height);
+  const int RESET_X1 = 5,
+            RESET_X2 = 165,
+            RESET_Y1 = (screen_height >> 1) + 40,
+            RESET_Y2 = screen_height - 5;
+  
+  const int MSG_X = 5,
+            MSG_Y = LINES_Y + height + 18;
+  
+  // Init
+  LCDClear();
+
+  LCDArea(COLOR_X - 1, COLOR_Y - 1, COLOR_X + width + 1, COLOR_Y + height + 1, WHITE, 0);
+  LCDArea(CANNY_X - 1, CANNY_Y - 1, CANNY_X + width + 1, CANNY_Y + height + 1, WHITE, 0);
+  LCDArea(LINES_X - 1, LINES_Y - 1, LINES_X + width + 1, LINES_Y + height + 1, WHITE, 0);
+
+  LCDArea(RESET_X1, RESET_Y1, RESET_X2, RESET_Y2, RED);
+  LCDSetFontSize(3);
+  LCDSetColor(WHITE, RED);
+  LCDSetPrintf(RESET_Y1 + 30, RESET_X1 + 37, "TOUCH");
+  LCDSetPrintf(RESET_Y1 + 60, RESET_X1 + 37, "RESET");
+
+  // Clear the camera's image triple-buffer
+  CAMGet((BYTE*)pColImg);
+  CAMGet((BYTE*)pColImg);
+  CAMGet((BYTE*)pColImg);
 
   while (!quit)
   {
+    CAMGet((BYTE*)pColImg);
 
+    IPCol2Gray((BYTE*)pColImg, pGrayImg);
+    BYTE* graySubImage = pGrayImg + y_row_offset*width;
+
+    canny_edge_detector(graySubImage, pEdgeImg, width, height);
+
+    Line *lines = (Line*)pBuffer;
+    int lineCount = ultrafast_line_detector(width, height, sizeof(pBuffer)/sizeof(Line), lines);
+
+    int dist = PSDGet(PSD_FRONT);
+    if (dist <= MIN_DIST) collision = true;
+    else collision = false;
+
+    int tx, ty;
+    KEYReadXY(&tx, &ty);
+    if (tx >= 0 || ty >= 0)
+    {
+      quit = true;
+      delay(INPUT_DELAY_MS);
+      continue;
+    }
+
+    int left_lane_idx = -1, right_lane_idx = -1;
+
+    if (!collision)
+    {
+      for (int i = 0; i < lineCount; i++)
+      {
+        Line line = lines[i];
+        if (line.len >= MIN_LINE_LEN)
+        {
+          if (line.y1 < line.y2)
+          {
+            if (line.x1 < NULL_X1 && line.x2 < line.x1)
+            {
+              if (left_lane_idx >= 0)
+              {
+                if (lines[left_lane_idx].x1 < line.x1) left_lane_idx = i;
+              }
+              else
+              {
+                left_lane_idx = i;
+              }
+            }
+            else if (line.x1 > NULL_X2 && line.x2 > line.x1)
+            {
+              if (right_lane_idx >= 0)
+              {
+                if (lines[right_lane_idx].x1 > line.x1) right_lane_idx = i;
+              }
+              else
+              {
+                right_lane_idx = i;
+              }
+            }
+          }
+          else
+          {
+            if (line.x2 < NULL_X1 && line.x2 > line.x1)
+            {
+              if (left_lane_idx >= 0)
+              {
+                if (lines[left_lane_idx].x2 < line.x2) left_lane_idx = i;
+              }
+              else
+              {
+                left_lane_idx = i;
+              }
+            }
+            else if (line.x2 > NULL_X2 && line.x2 < line.x1)
+            {
+              if (right_lane_idx >= 0)
+              {
+                if (lines[right_lane_idx].x2 > line.x2) right_lane_idx = i;
+              }
+              else
+              {
+                right_lane_idx = i;
+              }
+            }
+          }
+        }
+      }
+
+      LCDArea(MSG_X, MSG_Y, screen_width, MSG_Y + 30, BLACK);
+
+      if (left_lane_idx < 0 && right_lane_idx < 0)
+      {
+        VWSetSpeed(gMaxLinSpeed, 0);
+      }
+      else
+      { 
+        bool turning_right = false, turning_left = false;
+
+        if (left_lane_idx >= 0)
+        {
+          float intercept = 0.0f, y_border_dist = 0.0f;
+          Line left_lane = lines[left_lane_idx];
+
+          if (left_lane.y1 < left_lane.y2)
+          {
+            float rise = left_lane.y2 - left_lane.y1;
+            float run = left_lane.x1 - left_lane.x2;
+            float grad = rise / run;
+            float x_border_dist = NULL_X1 - left_lane.x1;
+            y_border_dist = left_lane.y1;
+            intercept = x_border_dist*grad;
+          }
+          else
+          {
+            float rise = left_lane.y1 - left_lane.y2;
+            float run = left_lane.x2 - left_lane.x1;
+            float grad = rise / run;
+            float x_border_dist = NULL_X1 - left_lane.x2;
+            y_border_dist = left_lane.y2;
+            intercept = x_border_dist*grad;
+          }
+
+          if (intercept < y_border_dist) 
+          {
+            turning_right = true;
+          }
+        }
+
+        if (right_lane_idx >= 0)
+        {
+          float intercept = 0.0f, y_border_dist = 0.0f;
+          Line right_lane = lines[right_lane_idx];
+
+          if (right_lane.y1 < right_lane.y2)
+          {
+            float rise = right_lane.y2 - right_lane.y1;
+            float run = right_lane.x2 - right_lane.x1;
+            float grad = rise / run;
+            float x_border_dist = right_lane.x1 - NULL_X2;
+            y_border_dist = right_lane.y1;
+            intercept = x_border_dist*grad;
+          }
+          else
+          {
+            float rise = right_lane.y1 - right_lane.y2;
+            float run = right_lane.x1 - right_lane.x2;
+            float grad = rise / run;
+            float x_border_dist = right_lane.x2 - NULL_X2;
+            y_border_dist = right_lane.y2;
+            intercept = x_border_dist*grad;
+          }
+
+          if (intercept < y_border_dist)
+          {
+            turning_left = true;
+          } 
+        }
+
+        if ((!turning_left && !turning_right) || (turning_left && turning_right))
+        {
+          VWSetSpeed(gMaxLinSpeed, 0);
+          LCDArea(125, LINES_Y + height + 5, 165, LINES_Y + height + 50, GREEN);
+          LCDArea(5, LINES_Y + height + 5, 45, LINES_Y + height + 50, GREEN);
+        }
+        else if (turning_left)
+        {
+          VWSetSpeed(gMaxLinSpeed, -1*gMaxAngSpeed);
+          LCDArea(125, LINES_Y + height + 5, 165, LINES_Y + height + 50, RED);
+          LCDArea(5, LINES_Y + height + 5, 45, LINES_Y + height + 50, GREEN);
+        }
+        else
+        {
+          VWSetSpeed(gMaxLinSpeed, gMaxAngSpeed);
+          LCDArea(125, LINES_Y + height + 5, 165, LINES_Y + height + 50, GREEN);
+          LCDArea(5, LINES_Y + height + 5, 45, LINES_Y + height + 50, RED);
+        }
+      }
+    }
+    else
+    {
+      VWSetSpeed(0, 0);
+      LCDArea(125, LINES_Y + height + 5, 165, LINES_Y + height + 50, RED);
+      LCDArea(5, LINES_Y + height + 5, 45, LINES_Y + height + 50, RED);
+      LCDSetFontSize(3);
+      LCDSetColor(BLACK, RED);
+      LCDSetPrintf(MSG_Y, MSG_X, "COLLISION");
+    }
+
+    // Display
+    LCDImageStart(COLOR_X, COLOR_Y, width, height);
+    COLOR* colorSubImage = pColImg + y_row_offset*width;
+    LCDImage((BYTE*)colorSubImage);
+
+    LCDImageStart(CANNY_X, CANNY_Y, width, height);
+    LCDImageGray(pEdgeImg);
+
+    LCDArea(LINES_X, LINES_Y, LINES_X + width, LINES_Y + height, BLACK);
+    for (int i = 0; i < lineCount; i++)
+    {
+      if (i == left_lane_idx || i == right_lane_idx)
+      {
+        LCDLine(lines[i].x1 + LINES_X, lines[i].y1 + LINES_Y, lines[i].x2 + LINES_X, lines[i].y2 + LINES_Y, GREEN);
+      }
+      else if (lines[i].len >= MIN_LINE_LEN && (lines[i].x2 < NULL_X1 || lines[i].x2 > NULL_X2))
+      {
+        LCDLine(lines[i].x1 + LINES_X, lines[i].y1 + LINES_Y, lines[i].x2 + LINES_X, lines[i].y2 + LINES_Y, RED);
+        //LCDPixel(lines[i].x1 + LINES_X, lines[i].y1 + LINES_Y, YELLOW);
+        //LCDPixel(lines[i].x2 + LINES_X, lines[i].y2 + LINES_Y, BLUE);
+      }
+    }
   }
+
+  gPhase = PHASE_SETTINGS;
+  VWSetSpeed(0, 0);
 }
 
 void setup() 
@@ -1143,6 +1563,8 @@ void setup()
 
   int err = EYEBOTInit();
   assert(!err);
+
+  LCDGetSize(&gLCDWidth, &gLCDHeight);
 }
 
 void loop() 
@@ -1162,136 +1584,4 @@ void loop()
       gPhase = PHASE_SETTINGS;
       break;
   }
-
-  // CAMGet((BYTE*)pColImg);
-  // IPCol2Gray((BYTE*)pColImg, pGrayImg);
-
-  // canny_edge_detector(pGrayImg, pEdgeImg, CAMWIDTH, CAMHEIGHT);
-
-  // //Detect lines
-  // Line *lines = (Line*)pBuffer;
-  // int lineCount = 0;
-  // int MAX_LINE_COUNT = sizeof(pBuffer)/sizeof(Line);
-  // u8 *matchedPatterns = (u8*)pGrayImg;
-  // memset(matchedPatterns, 0, QQVGA_PIXELS);
-
-  // for (int y = 0; y < CAMHEIGHT; y += 4)
-  // for (int x = 0; x < CAMWIDTH; x += 4)
-  // {
-  //   u16 pattern = 0;
-
-  //   for (int yy = 0; yy < 4; yy++)
-  //   {
-  //     u16 count = 0;
-  //     for (int xx = 0; xx < 4; xx++)
-  //     {
-  //       count++;
-  //       int i = (y + yy)*CAMWIDTH + (x + xx);
-
-  //       if (pEdgeImg[i])
-  //         pattern |= 1 << ((yy+1)*4 - count);
-  //     }
-  //   }
-
-  //   int i = y*CAMWIDTH + x;
-  //   matchedPatterns[i] = pPatternBins[pattern];
-
-  //   if (matchedPatterns[i])
-  //   {
-  //     bool existing_line = false;
-
-  //     if (x > 0 && !existing_line)
-  //     {
-  //       u8 left_pattern = matchedPatterns[y*CAMWIDTH + (x - 4)];
-  //       if (left_pattern)
-  //         existing_line = connect_left_lines(x, y, (x - 4), y, matchedPatterns[i], left_pattern, lines, lineCount);
-  //     }
-
-  //     if (y > 0)
-  //     {
-  //       if (!existing_line)
-  //       {
-  //         u8 top_pattern = matchedPatterns[(y - 4)*CAMWIDTH + x];
-  //         if (top_pattern)
-  //           existing_line = connect_upper_lines(x, y, x, (y - 4), matchedPatterns[i], top_pattern, lines, lineCount);
-  //       }
-
-  //       if (x > 0 && !existing_line)
-  //       {
-  //         u8 top_left_pattern = matchedPatterns[(y - 4)*CAMWIDTH + (x - 4)];
-  //         if (top_left_pattern)
-  //           existing_line = connect_upper_lines(x, y, (x - 4), (y - 4), matchedPatterns[i], top_left_pattern, lines, lineCount);
-  //       }
-
-  //       if (x < CAMWIDTH - 4 && !existing_line)
-  //       {
-  //         u8 top_right_pattern = matchedPatterns[(y - 4)*CAMWIDTH + (x + 4)];
-  //         if (top_right_pattern)
-  //           existing_line = connect_upper_lines(x, y, (x + 4), (y - 4), matchedPatterns[i], top_right_pattern, lines, lineCount);
-  //       }
-  //     }
-
-  //     if (!existing_line && lineCount < MAX_LINE_COUNT)
-  //     {
-  //       LinePatternInfo pattern_info = pPatternInfoLookUps[matchedPatterns[i] - 1];
-  //       u16 x1, y1, x2, y2;
-  //       get_pixel_coords(pattern_info.start, x, y, &x1, &y1);
-  //       get_pixel_coords(pattern_info.end, x, y, &x2, &y2);
-  //       lines[lineCount] = {x1, y1, x2, y2, 0};
-  //       lineCount++;
-  //     }
-  //   }
-  // }
-
-  // int midpoint = CAMWIDTH >> 1;
-  // int closest_left_lane_idx = -1;
-  // int closest_right_lane_idx = -1;
-
-  // static int left_lane_y_midpoint = 0, left_lane_x_midpoint = 0; 
-  // static int right_lane_y_midpoint = CAMHEIGHT, right_lane_x_midpoint = CAMWIDTH;
-
-  // for (int i = 0; i < lineCount; i++)
-  // {
-  //   if (lines[i].is_connected)
-  //   {
-  //     if (lines[i].x1 < midpoint && lines[i].x2 < midpoint && lines[i].x1 >= lines[i].x2)
-  //     {
-  //       if (closest_left_lane_idx < 0)
-  //       {
-  //         closest_left_lane_idx = i;
-  //         break;
-  //       }
-
-  //       if (lines[i].x1 >= lines[closest_left_lane_idx].x1) closest_left_lane_idx = i;
-  //     }
-  //     else if (lines[i].x1 > midpoint && lines[i].x2 > midpoint && lines[i].x1 <= lines[i].x2)
-  //     {
-  //       if (closest_right_lane_idx < 0)
-  //       {
-  //         closest_right_lane_idx = i;
-  //         break;
-  //       }
-
-  //       if (lines[i].x1 <= lines[closest_right_lane_idx].x1) closest_right_lane_idx = i;
-  //     }
-  //   }
-  // }
-
-  // if (closest_left_lane_idx >= 0)
-  // {
-  //   Line line = lines[closest_left_lane_idx];
-  //   left_lane_x_midpoint = (line.x2 + line.x1) >> 1;
-  //   left_lane_y_midpoint = (line.y2 + line.y1) >> 1;
-  // }
-
-  // if (closest_right_lane_idx >= 0)
-  // {
-  //   Line line = lines[closest_right_lane_idx];
-  //   right_lane_x_midpoint = (line.x2 + line.x1) >> 1;
-  //   right_lane_y_midpoint = (line.y2 + line.y1) >> 1;
-  // }
-
-  // int both_lanes_x_midpoint = (left_lane_x_midpoint + right_lane_x_midpoint) >> 1;
-  // int both_lanes_y_midpoint = (left_lane_y_midpoint + right_lane_y_midpoint) >> 1;
-
 }

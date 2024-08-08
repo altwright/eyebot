@@ -800,6 +800,7 @@ void IPCol2Gray(BYTE* imgIn, BYTE* grayOut)
     return;
   
   COLOR *img = (COLOR*)imgIn;
+  float divisor = 1.0f/3.0f;
 
   for (int y = 0; y < QQVGA_HEIGHT; y++)
   {
@@ -810,7 +811,7 @@ void IPCol2Gray(BYTE* imgIn, BYTE* grayOut)
       BYTE r, g, b;
       IPPCol2RGB(img[i], &r, &g, &b);
 
-      grayOut[i] = (r + g + b)/3;
+      grayOut[i] = (r + g + b)*divisor;
     }
   }
 }
@@ -1178,7 +1179,7 @@ int MOTORDrive(int motor, int speed)
   if (speed < -100 || speed > 100)
     return -1;
 
-  if (motor < 0 || motor > 1)
+  if (motor < 1 || motor > 2)
     return -1;
 
   if (gCurrentVWOp != VW_OP_UNDEFINED)
@@ -1193,8 +1194,9 @@ int MOTORDrive(int motor, int speed)
   float percentage = reverse ? -1*speed / 100.0f : speed / 100.0f;
 
   int pwm = 255*percentage;
+  if (pwm >= 255) pwm = 254; 
 
-  if (motor == 0)
+  if (motor == 1)// Left
   {
     if (reverse)
     {
@@ -1207,7 +1209,7 @@ int MOTORDrive(int motor, int speed)
       analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
     }
   }
-  else
+  else if (motor == 2)// Right
   {
     if (reverse)
     {
@@ -1271,10 +1273,10 @@ int VWSetSpeed(int lin_speed, int ang_speed)
     timer_pause(gTimerGroup, gMotorTimerIdx);
   }
 
-  analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
-  analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
-  analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
-  analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
+  // analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
+  // analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
+  // analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
+  // analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
 
   // Set current eyebot position
   int x, y, angle;
@@ -1317,16 +1319,16 @@ int VWSetSpeed(int lin_speed, int ang_speed)
     if (gLeftMotorPWM < 0)
       gLeftMotorPWM = 0;
     
-    if (gLeftMotorPWM > 255)
-      gLeftMotorPWM = 255;
+    if (gLeftMotorPWM >= 255)
+      gLeftMotorPWM = 254;
     
     if (gRightMotorPWM < 0)
       gRightMotorPWM = 0;
 
-    if (gRightMotorPWM > 255)
-      gRightMotorPWM = 255;
+    if (gRightMotorPWM >= 255)
+      gRightMotorPWM = 254;
 
-    int ang_pwm_offset = 255 * ang_speed_percentage;
+    int ang_pwm_offset = 254 * ang_speed_percentage;
 
     if (clockwise)
     {
@@ -1364,16 +1366,16 @@ int VWSetSpeed(int lin_speed, int ang_speed)
 
     if (clockwise)
     {
-      analogWrite(PIN_LEFT_MOTOR_FORWARD, 255 * ang_speed_percentage);
+      analogWrite(PIN_LEFT_MOTOR_FORWARD, 254 * ang_speed_percentage);
       analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
       analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
-      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 255 * ang_speed_percentage);
+      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 254 * ang_speed_percentage);
     }
     else
     {
       analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
-      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 255 * ang_speed_percentage);
-      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 255 * ang_speed_percentage);
+      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 254 * ang_speed_percentage);
+      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 254 * ang_speed_percentage);
       analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
     }
   }

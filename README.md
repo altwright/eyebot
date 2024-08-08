@@ -7,7 +7,7 @@
 | 1 | 3 |
 | 2 | 1 |
 
-| T-Display-S3 GPIO Pin | Motor Diver Pin |
+| T-Display-S3 GPIO Pin | Motor Driver Pin |
 |-----------------------|-----------------|
 | 3 | B-1A |
 | 10 | B-1B |
@@ -61,3 +61,11 @@ with the settings under the "Tools" dropdown menu adjusted to:
 Set board-type to "AI-Thinker ESP32-CAM" and upload ```camera.ino```. 
 
 When new code is uploaded to the T-Display-S3 while both the T-Display-S3 and the ESP32-CAM are on-board the EyeBot, the image that the ESP32-CAM returns will most likely be out of sync. Disconnecting the EyeBot from power and then reconnecting it should fix this.
+
+# Examples
+
+| Example name | Description |
+| ------------ | ----------- |
+| color_nav | After sampling a pixel colour in the EyeBot's view, the EyeBot drives toward the centre-point of the largest object in its view whose colour falls within the specified HSI threshold, all the while avoiding collisions. |
+| ultrafast_lane | A lane-based navigation demo that detects lanes using the ["Ultrafast" line detector](https://www.spiedigitallibrary.org/journals/journal-of-electronic-imaging/volume-31/issue-4/043019/Ultrafast-line-detector/10.1117/1.JEI.31.4.043019.short) method. |
+| threshold_lane | A lane-based navigation demo that detects lanes using the ["Color-Based Segmentation"](https://ieeexplore.ieee.org/document/1505186) method. |
