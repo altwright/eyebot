@@ -282,8 +282,8 @@ void testing_screen()
       {
         if ((i - lane_left_edge_idx) <= LANE_PX_WIDTH)
           bin_subimg[(i + lane_left_edge_idx) >> 1] = 0xFF;// Mark the midpoint of the possible lane
-        else
-          lane_left_edge_idx = -1;
+        
+        lane_left_edge_idx = -1;
       }
     }
 
@@ -298,7 +298,7 @@ void testing_screen()
     int sets_len = 0;
 
     // Find continuous sets of points that form curves
-    for (int y = 1; y < HEIGHT - 1; y++)
+    for (int y = 1; y < HEIGHT; y++)
     for (int x = LANE_X_RANGE; x < CAMWIDTH - LANE_X_RANGE; x++)
     {
       int i = y*CAMWIDTH + x;
@@ -308,6 +308,7 @@ void testing_screen()
         int ur = (y - 1)*CAMWIDTH + (x + LANE_X_RANGE);
 
         bool set_exists = false;
+
         for (int u = ul; u < ur; u++)
         {
           if (bin_subimg[u])
@@ -329,20 +330,20 @@ void testing_screen()
 
         if (!set_exists && sets_len < gSetsMaxLen)
         {
-          pSets[sets_len] = {.head_idx = i, .tail_idx = i, 0};
+          pSets[sets_len] = {.head_idx = i, .tail_idx = i, .len = 0};
           sets_len++;
         }
       }
     }
 
-    // Find the top-three longest curves
+    int longest_idx = 0, second_longest_idx = 0, third_longest_idx = 0;
 
-    int top_set_idxs[MAX_LONGEST_SETS] = {0};// least to greatest
-    int least_longest_top_set_idx = 0;
-
+    // Find top three longest sets
     for (int i = 0; i < sets_len; i++)
     {
-      
+      if (pSets[i].len > pSets[longest_idx].len) longest_idx = i;
+      else if (pSets[i].len > pSets[second_longest_idx].len) second_longest_idx = i;
+      else if (pSets[i].len > pSets[third_longest_idx].len) third_longest_idx = i;
     }
 
     LCDImageStart(5, 5, CAMWIDTH, HEIGHT);

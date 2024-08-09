@@ -56,6 +56,8 @@ typedef void (*input_callback) ();
 #define QQVGA_WIDTH 160
 #define QQVGA_HEIGHT 120
 
+#define CAM_TIMEOUT_MS 500 
+
 struct RawDistancePair
 {
   int raw;
@@ -665,6 +667,9 @@ int CAMGet(BYTE *buf)
 
   BYTE *rx_buf = (BYTE*)pLCDBuffer;
 
+  unsigned long start_time = millis();
+  bool timed_out = false;
+
   for (int i = 0; i < CAM_NUM_IMAGE_SEGMENTS; i++)
   {
     spi_transaction_t t = {};
@@ -672,7 +677,13 @@ int CAMGet(BYTE *buf)
     t.tx_buffer = NULL;
     t.rx_buffer = rx_buf + i*MAX_RX_SEGMENT_SIZE;
 
-    while (digitalRead(PIN_CAM_SIGNAL));
+    while ((millis() - start_time < CAM_TIMEOUT_MS) && digitalRead(PIN_CAM_SIGNAL));
+
+    if (digitalRead(PIN_CAM_SIGNAL))
+    {
+      timed_out = true;
+      break;
+    }
 
     esp_err_t err = spi_device_transmit(gCamSPIHandle, &t);
     assert(err == ESP_OK);
@@ -681,10 +692,19 @@ int CAMGet(BYTE *buf)
   RGB565 *pixels = (RGB565*)rx_buf;
   COLOR *img = (COLOR*)buf;
 
-  for (int i = 0; i < QQVGA_WIDTH*QQVGA_HEIGHT; i++)
+  if (timed_out)
   {
-    //rgb565SwapEndianess(&pixels[i]);
-    img[i] = rgb565To888(pixels[i]);
+    for (int i = 0; i < QQVGA_WIDTH*QQVGA_HEIGHT; i++)
+    {
+      img[i] = RED;
+    }
+  }
+  else
+  {
+    for (int i = 0; i < QQVGA_WIDTH*QQVGA_HEIGHT; i++)
+    {
+      img[i] = rgb565To888(pixels[i]);
+    }
   }
 
   return 0;
@@ -697,6 +717,9 @@ int CAMGetGray(BYTE *buf)
 
   BYTE *rx_buf = (BYTE*)pLCDBuffer;
 
+  unsigned long start_time = millis();
+  bool timed_out = false;
+
   for (int i = 0; i < CAM_NUM_IMAGE_SEGMENTS; i++)
   {
     spi_transaction_t t = {};
@@ -704,7 +727,13 @@ int CAMGetGray(BYTE *buf)
     t.tx_buffer = NULL;
     t.rx_buffer = rx_buf + i*MAX_RX_SEGMENT_SIZE;
 
-    while (digitalRead(PIN_CAM_SIGNAL));
+    while ((millis() - start_time < CAM_TIMEOUT_MS) && digitalRead(PIN_CAM_SIGNAL));
+
+    if (digitalRead(PIN_CAM_SIGNAL))
+    {
+      timed_out = true;
+      break;
+    }
 
     esp_err_t err = spi_device_transmit(gCamSPIHandle, &t);
     assert(err == ESP_OK);
@@ -712,15 +741,26 @@ int CAMGetGray(BYTE *buf)
 
   RGB565 *pixels = (RGB565*)rx_buf;
 
-  for (int i = 0; i < QQVGA_WIDTH*QQVGA_HEIGHT; i++)
+  if (timed_out)
   {
-    //rgb565SwapEndianess(&pixels[i]);
-    COLOR col = rgb565To888(pixels[i]);
+    for (int i = 0; i < QQVGA_WIDTH*QQVGA_HEIGHT; i++)
+    {
+      buf[i] = 0xFF;
+    }
+  }
+  else
+  {
+    float divisor = 1.0f/3.0f;
 
-    BYTE r, g, b;
-    IPPCol2RGB(col, &r, &g, &b);
+    for (int i = 0; i < QQVGA_WIDTH*QQVGA_HEIGHT; i++)
+    {
+      COLOR col = rgb565To888(pixels[i]);
 
-    buf[i] = (r + g + b)/3;
+      BYTE r, g, b;
+      IPPCol2RGB(col, &r, &g, &b);
+
+      buf[i] = (r + g + b)*divisor;
+    }
   }
 
   return 0;

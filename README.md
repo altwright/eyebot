@@ -66,6 +66,6 @@ When new code is uploaded to the T-Display-S3 while both the T-Display-S3 and th
 
 | Example name | Description |
 | ------------ | ----------- |
-| color_nav | After sampling a pixel colour in the EyeBot's view, the EyeBot drives toward the centre-point of the largest object in its view whose colour falls within the specified HSI threshold, all the while avoiding collisions. |
+| color_track | After sampling a pixel colour in the EyeBot's view, the EyeBot drives toward the centre-point of the largest object in its view whose colour falls within the specified HSI threshold, all the while avoiding collisions. |
 | ultrafast_lane | A lane-based navigation demo that detects lanes using the ["Ultrafast" line detector](https://www.spiedigitallibrary.org/journals/journal-of-electronic-imaging/volume-31/issue-4/043019/Ultrafast-line-detector/10.1117/1.JEI.31.4.043019.short) method. |
-| threshold_lane | A lane-based navigation demo that detects lanes using the ["Color-Based Segmentation"](https://ieeexplore.ieee.org/document/1505186) method. |
+| color_lane | A lane-based navigation demo that detects lanes using the ["Color-Based Segmentation"](https://ieeexplore.ieee.org/document/1505186) method. |
