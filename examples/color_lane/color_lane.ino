@@ -4,11 +4,13 @@
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
 #define INPUT_DELAY_MS 100
-#define GRAY_THRESHOLD 10
-#define GRAY_COUNT_THRESHOLD 20
+#define GRAY_THRESHOLD 35
+#define GRAY_COUNT_THRESHOLD 10
 #define LANE_PX_WIDTH 20
-#define SET_X_RANGE 5
-#define MAX_LONGEST_SETS 3
+#define LANE_X_RANGE 5
+#define NUM_LONGEST_SETS 3
+
+#define QQVGA_HEIGHT 120
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -37,6 +39,17 @@ int gSetsMaxLen = -1;
 int gMaxLinSpeed = 170, gMaxAngSpeed = 60;
 int gLCDWidth = -1, gLCDHeight = -1;
 Phase gPhase = PHASE_TESTING;
+
+u16 v1[QQVGA_HEIGHT];
+u16 v2[QQVGA_HEIGHT];
+u16 v3[QQVGA_HEIGHT];
+u16 uk[QQVGA_HEIGHT];
+float phi1[QQVGA_HEIGHT];
+float phi2[QQVGA_HEIGHT];
+float phi3[QQVGA_HEIGHT];
+float aks[NUM_LONGEST_SETS][QQVGA_HEIGHT];
+float bks[NUM_LONGEST_SETS][QQVGA_HEIGHT];
+float cks[NUM_LONGEST_SETS][QQVGA_HEIGHT];
 
 void settings_screen()
 {
@@ -184,7 +197,7 @@ void settings_screen()
 void testing_screen()
 {
   bool quit = false;
-
+  
   const int Y_OFFSET = (CAMHEIGHT >> 1) + 20;
   const int HEIGHT = CAMHEIGHT - Y_OFFSET;
 
@@ -196,9 +209,19 @@ void testing_screen()
 
   const float avg_div = 1/3.0f;
 
+  for (int i = 0; i < QQVGA_HEIGHT; i++)
+  {
+    v1[i] = 1;
+    phi1[i] = 1.0f;
+  }
+
   while(!quit)
   {
     CAMGet((BYTE*)pColImg);
+    COLOR *col_subimg = pColImg + Y_OFFSET*CAMWIDTH;
+
+    LCDImageStart(5, 5, CAMWIDTH, HEIGHT);
+    LCDImage((BYTE*)col_subimg);
 
     memset(pGrayLevelCount, 0, sizeof(pGrayLevelCount));
     memset(bin_subimg, 0, HEIGHT*CAMWIDTH);
@@ -212,28 +235,28 @@ void testing_screen()
       BYTE r, g, b;
       IPPCol2RGB(col_subimg[i], &r, &g, &b);
       int ri = r, gi = g, bi = b;
+      int gray_val = (ri + gi + bi)*avg_div;
+      if (gray_val > 255) gray_val = 255;
+      gray_subimg[i] = gray_val;
 
       if (abs(ri - gi) < GRAY_THRESHOLD &&
           abs(gi - bi) < GRAY_THRESHOLD &&
           abs(bi - ri) < GRAY_THRESHOLD)
       {
-        int gray_val = (ri + gi + bi)*avg_div;
-        if (gray_val > 255) gray_val = 255;
-
         pGrayLevelCount[gray_val]++;
+
         if (pGrayLevelCount[gray_val] > pGrayLevelCount[gray_level_count_max_idx])
           gray_level_count_max_idx = gray_val;
 
-        gray_subimg[i] = gray_val;
-        bin_subimg[i] = 0xFF;
+        bin_subimg[i] = 0xFF;// possible road pixel
       }
       else
       {
-        bin_subimg[i] = 0;//non-gray pixel
+        bin_subimg[i] = 0;// non-road pixel
       }
     }
 
-    int threshold_head_idx = 255, threshold_tail_idx = 0;
+    int threshold_head_idx = gray_level_count_max_idx, threshold_tail_idx = 0;
 
     for (int i = 1; i < gray_level_count_max_idx; i++)
     {
@@ -246,11 +269,10 @@ void testing_screen()
 
     for (int i = gray_level_count_max_idx; i < 255; i++)
     {
-      if (pGrayLevelCount[i] >= 20 && 
-          pGrayLevelCount[i + 1] < 20)
+      if (pGrayLevelCount[i] >= GRAY_COUNT_THRESHOLD && 
+          pGrayLevelCount[i + 1] < GRAY_COUNT_THRESHOLD)
       {
         threshold_head_idx = i;
-        break;
       }
     }
 
@@ -264,36 +286,36 @@ void testing_screen()
         bin_subimg[i] = gray_subimg[i] > threshold ? 0xFF : 0; //Now marks a possible lane
     }
 
-    int lane_left_edge_idx = -1;
+    LCDImageStart(5, 5 + HEIGHT + 5, CAMWIDTH, HEIGHT);
+    LCDImageGray(bin_subimg);
 
     for (int y = 0; y < HEIGHT; y++)
-    for (int x = 0; x < CAMWIDTH; x++)
     {
-      int i = y*CAMWIDTH + x;
+      int lane_left_edge_idx = -1;
 
-      if (bin_subimg[i])
+      for (int x = 0; x < CAMWIDTH; x++)
       {
-        if (lane_left_edge_idx < 0)
-          lane_left_edge_idx = i;
+        int i = y*CAMWIDTH + x;
+
+        if (bin_subimg[i])
+        {
+          if (lane_left_edge_idx < 0)
+            lane_left_edge_idx = i;
+        }
+        else if (lane_left_edge_idx >= 0)
+        {
+          if ((i - lane_left_edge_idx) <= LANE_PX_WIDTH)
+            bin_subimg[(i + lane_left_edge_idx) >> 1] = 0xFF;// Mark the midpoint of the possible lane
+          
+          lane_left_edge_idx = -1;
+        }
 
         bin_subimg[i] = 0;
       }
-      else if (lane_left_edge_idx >= 0)
-      {
-        if ((i - lane_left_edge_idx) <= LANE_PX_WIDTH)
-          bin_subimg[(i + lane_left_edge_idx) >> 1] = 0xFF;// Mark the midpoint of the possible lane
-        
-        lane_left_edge_idx = -1;
-      }
     }
 
-    LaneSet sets[MAX_SETS] = {};
-    int set_idx = 0;
-    for (int i = 0; i < MAX_SETS; i++)
-    {
-      sets[i].head_idx = -1;
-      sets[i].len = 0;
-    }
+    LCDImageStart(5, 5 + 2*(HEIGHT + 5), CAMWIDTH, HEIGHT);
+    LCDImageGray(bin_subimg);
 
     int sets_len = 0;
 
@@ -309,7 +331,7 @@ void testing_screen()
 
         bool set_exists = false;
 
-        for (int u = ul; u < ur; u++)
+        for (int u = ul; u <= ur; u++)
         {
           if (bin_subimg[u])
           {
@@ -330,24 +352,112 @@ void testing_screen()
 
         if (!set_exists && sets_len < gSetsMaxLen)
         {
-          pSets[sets_len] = {.head_idx = i, .tail_idx = i, .len = 0};
+          pSets[sets_len] = {.head_idx = i, .tail_idx = i, .len = 1};
           sets_len++;
         }
       }
     }
 
-    int longest_idx = 0, second_longest_idx = 0, third_longest_idx = 0;
+    int longest_idxs[NUM_LONGEST_SETS] = {0};
 
     // Find top three longest sets
+    
     for (int i = 0; i < sets_len; i++)
     {
-      if (pSets[i].len > pSets[longest_idx].len) longest_idx = i;
-      else if (pSets[i].len > pSets[second_longest_idx].len) second_longest_idx = i;
-      else if (pSets[i].len > pSets[third_longest_idx].len) third_longest_idx = i;
+      for (int k = 0; k < NUM_LONGEST_SETS; k++)
+      {
+        if (pSets[i].len > pSets[k].len)
+        {
+          longest_idxs[k] = i;
+          break;
+        }
+      }
     }
 
-    LCDImageStart(5, 5, CAMWIDTH, HEIGHT);
-    LCDImageGray(bin_subimg);
+    // Least-Square Method of finding matching quadratic curve
+
+    for (int k = 0; k < NUM_LONGEST_SETS; k++)
+    {
+      // Match curve for longest set
+      LaneSet set = pSets[longest_idxs[k]];
+      u16 y0 = set.head_idx / CAMWIDTH;
+      u16 x0 = set.head_idx % CAMWIDTH;
+      v2[0] = y0;
+      v3[0] = y0 * y0;
+      uk[0] = x0;
+
+      float v2_dot_phi1 = v2[0] * phi1[0];
+      float v3_dot_phi1 = v3[0] * phi1[0];
+      float phi1_mag_sq = phi1[0] * phi1[0];
+
+      int head = set.head_idx;
+
+      for (int i = 1; i < set.len; i++)
+      {
+        int bl = head + i*CAMWIDTH - LANE_X_RANGE;
+        int br = head + i*CAMWIDTH + LANE_X_RANGE;
+
+        for (int b = bl; b <= br; b++)
+        {
+          if (bin_subimg[b])// Assumes that it will be found
+          {
+            u16 yi = b / CAMWIDTH;
+            u16 xi = b % CAMWIDTH;
+            v2[i] = yi;
+            v3[i] = yi*yi;
+            uk[i] = xi;
+            head = b;
+
+            v2_dot_phi1 += v2[i] * phi1[i];
+            v3_dot_phi1 += v3[i] * phi1[i];
+            phi1_mag_sq += phi1[i] * phi1[i];
+
+            break;
+          }
+        }
+      }
+
+      float first_phi2_coeff = v2_dot_phi1 / (float)set.len;
+      float first_phi3_coeff = v3_dot_phi1 / (float)set.len;
+
+      float v3_dot_phi2 = 0.0f;
+      float phi2_mag_sq = 0.0f;
+
+      for (int i = 0; i < set.len; i++)
+      {
+        phi2[i] = (float)v2[i] - first_phi2_coeff * phi1[i];
+        phi3[i] = (float)v3[i] - first_phi3_coeff * phi1[i];
+
+        v3_dot_phi2 += v3[i] * phi2[i];
+        phi2_mag_sq += phi2[i] * phi2[i];
+      }
+
+      float second_phi3_coeff = v3_dot_phi2 / (float)phi2_mag_sq;
+      float phi3_mag_sq = 0;
+
+      float uk_dot_phi3 = 0.0f, uk_dot_phi2 = 0.0f, uk_dot_phi1 = 0.0f;
+
+      for (int i = 0; i < set.len; i++)
+      {
+        phi3[i] -= second_phi3_coeff * phi2[i];
+        phi3_mag_sq += phi3[i] * phi3[i];
+
+        uk_dot_phi3 += uk[i] * phi3[i];
+        uk_dot_phi2 += uk[i] * phi2[i];
+        uk_dot_phi1 += uk[i] * phi1[i];
+      }
+
+      float ak_coeff = uk_dot_phi3 / phi3_mag_sq;
+      float bk_coeff = uk_dot_phi2 / phi2_mag_sq;
+      float ck_coeff = uk_dot_phi1 / phi1_mag_sq;
+
+      for (int i = 0; i < set.len; i++)
+      {
+        aks[k][i] = ak_coeff * phi3[i];
+        bks[k][i] = bk_coeff * phi2[i];
+        cks[k][i] = ck_coeff * phi1[i];
+      }
+    }
   }
 }
 

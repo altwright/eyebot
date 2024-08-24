@@ -61,7 +61,7 @@ const COLOR RED = 0xFF0000,
             YELLOW = 0xFFFF00, 
             OLIVE = 0x808000;
 
-//Must be called at setup()
+//Must be called at least once
 int EYEBOTInit(); 
 
 // Print string and arguments on LCD
@@ -85,16 +85,19 @@ int LCDSetColor(COLOR fg = WHITE, COLOR bg = BLACK);
 // Set font for subsequent print operation
 int LCDSetFont(int font, int variation);
 
-// Set font-size (7..18) for subsequent print operation
+// Set font-size for subsequent print operation
 int LCDSetFontSize(int fontsize);
 
 // Set LCD Mode (0=default)
+// NOT IMPLEMENTED
 int LCDSetMode(int mode);
 
 // Set menu entries for soft buttons
+// NOT IMPLEMENTED
 int LCDMenu(char *st1, char *st2, char *st3, char *st4);
 
 // Set menu for i-th entry with color [1..4]
+// NOT IMPLEMENTED
 int LCDMenuI(int pos, char *string, COLOR fg, COLOR bg);
 
 // Get LCD resolution in pixels
@@ -115,22 +118,24 @@ int LCDArea(int x1, int y1, int x2, int y2, COLOR col, int fill = 1);
 // Draw filled/hollow circle
 int LCDCircle(int x1, int y1, int radius, COLOR col, int fill = 1);
 
-// Define image type for LCD (default QQVGA; 0,0; full)
+// Define image type for LCD
+// NOT IMPLEMENTED
 int LCDImageSize(int t);
 
-// Define image start position and size (default 0,0; max_x, max_y)
-int LCDImageStart(int x, int y, int xs = 160, int ys = 120);
+// Define image start position and size
+int LCDImageStart(int x = 0, int y = 0, int xs = 160, int ys = 120);
 
-// Print color image at screen start pos. and size
+// Print color image at image start position and size
 int LCDImage(BYTE *img);
 
-// Print gray image [0..255] black..white
+// Print gray image [0...255] black...white
 int LCDImageGray(BYTE *g);
 
-// Print binary image [0..1] black/white
+// Print binary image [0...1] black/white
 int LCDImageBinary(BYTE *b);
 
 // Refresh LCD output
+// NOT IMPLEMENTED
 int LCDRefresh(void);
 
 enum {
@@ -142,7 +147,7 @@ enum {
   ANYKEY = ~0
 };
 
-// Blocking read (and wait) for key press (returns KEY1..KEY4)
+// Blocking read (and wait) for key press (returns KEY1...KEY4 as a bitmask)
 int KEYGet(void);            
 
 // Non-blocking read of key press (returns NOKEY=0 if no key)
@@ -189,9 +194,11 @@ extern int CAMSIZE;
 #define CAM5MP_SIZE (CAM5MP_PIXELS * sizeof(COLOR))
 
 // Change camera resolution (will also set IP resolution)
+// NOT IMPLEMENTED
 int CAMInit(int resolution);    
 
 // Stops camera stream
+// NOT IMPLEMENTED
 int CAMRelease(void);           
 
 // Read one color camera image
@@ -201,15 +208,19 @@ int CAMGet(BYTE *buf);
 int CAMGetGray(BYTE *buf);      
 
 // Set IP resolution using CAM constants (also automatically set by CAMInit)
+// NOT IMPLEMENTED
 int IPSetSize(int resolution);                                
 
 // Read PNM file, fill/crop if req.; return 3:color, 2:gray, 1:b/w, -1:error
+// NOT IMPLEMENTED
 int IPReadFile(char *filename, BYTE* img);                    
 
 // Write color PNM file
+// NOT IMPLEMENTED
 int IPWriteFile(char *filename, BYTE* img);                   
 
 // Write gray scale PGM file
+// NOT IMPLEMENTED
 int IPWriteFileGray(char *filename, BYTE* gray);              
 
 // Laplace edge detection on gray image
@@ -252,74 +263,97 @@ BYTE IPPRGB2Hue(BYTE r, BYTE g, BYTE b);
 void IPPRGB2HSI(BYTE r, BYTE g, BYTE b, BYTE* h, BYTE* s, BYTE* i); 
 
 // Execute Linux program in background
+// NOT IMPLEMENTED
 char* OSExecute(char* command);
 
 // RoBIOS Version
+// NOT IMPLEMENTED
 int OSVersion(char* buf);
 
 // RoBIOS-IO Board Version
+// NOT IMPLEMENTED
 int OSVersionIO(char* buf);
 
 // Speed in MHz
+// NOT IMPLEMENTED
 int OSMachineSpeed(void);
 
 // Machine type
+// NOT IMPLEMENTED
 int OSMachineType(void);
 
 // Machine name
+// NOT IMPLEMENTED
 int OSMachineName(char* buf);
 
 // Machine ID derived from MAC address
+// NOT IMPLEMENTED
 int OSMachineID(void);
 
 typedef int TIMER;
 
 // Wait for n/1000 sec
+// NOT IMPLEMENTED
 int OSWait(int n);
 
 // Add fct to 1000Hz/scale timer
+// NOT IMPLEMENTED
 TIMER OSAttachTimer(int scale, void (*fct)(void));
 
 // Remove fct from 1000Hz/scale timer
+// NOT IMPLEMENTED
 int OSDetachTimer(TIMER t);
 
 // Get system time (ticks in 1/1000 sec)
+// NOT IMPLEMENTED
 int OSGetTime(int *hrs,int *mins,int *secs,int *ticks); 
 
 // Count in 1/1000 sec since system start
+// NOT IMPLEMENTED
 int OSGetCount(void);
 
 // Init communication (see parameters below), interface number as in HDT file
+// NOT IMPLEMENTED
 int SERInit(int interface, int baud,int handshake); 
 
 // Send single character
+// NOT IMPLEMENTED
 int SERSendChar(int interface, char ch);
 
 // Send string (Null terminated)
+// NOT IMPLEMENTED
 int SERSend(int interface, char *buf);              
 
 // Receive single character
+// NOT IMPLEMENTED
 char SERReceiveChar(int interface);
 
 // Receive String (Null terminated), returns number of chars received
+// NOT IMPLEMENTED
 int SERReceive(int interface, char *buf, int size);
 
 // Flush interface buffers
+// NOT IMPLEMENTED
 int SERFlush(int interface);
 
 // Close Interface
+// NOT IMPLEMENTED
 int SERClose(int interface);
 
 // Play beep sound
+// NOT IMPLEMENTED
 int AUBeep(void);
 
 // Play audio sample in background (mp3 or wave)
+// NOT IMPLEMENTED
 int AUPlay(char* filename);
 
 // Check if AUPlay has finished
+// NOT IMPLEMENTED
 int AUDone(void);
 
 // Return microphone A-to-D sample value
+// NOT IMPLEMENTED
 int AUMicrophone(void);
 
 enum {
@@ -336,39 +370,51 @@ int PSDGet(int psd);
 int PSDGetRaw(int psd);
 
 // Measure distances in [mm]; default 360Â° and 360 points
+// NOT IMPLEMENTED
 int LIDARGet(int distance[]);
 
 // range [1..360Â°], tilt angle down, number of points
+// NOT IMPLEMENTED
 int LIDARSet(int range, int tilt, int points);  
 
 // Set servo [1..14] position to [1..255] or power down (0)
+// NOT IMPLEMENTED
 int SERVOSet(int servo, int angle);             
 
 // Set servo [1..14] position bypassing HDT
+// NOT IMPLEMENTED
 int SERVOSetRaw (int servo, int angle);
 
 // Set servo [1..14] limits in 1/100 sec
+// NOT IMPLEMENTED
 int SERVORange(int servo, int low, int high);
 
 // Set motor [1..4] speed in percent [-100 ..+100]
+// NOT IMPLEMENTED
 int MOTORDrive(int motor, int speed);
 
 // Set motor [1..4] speed bypassing HDT
+// NOT IMPLEMENTED
 int MOTORDriveRaw(int motor, int speed);
 
 // Set motor [1..4] PID controller values [1..255]
+// NOT IMPLEMENTED
 int MOTORPID(int motor, int p, int i, int d);
 
 // Stop PID control loop
+// NOT IMPLEMENTED
 int MOTORPIDOff(int motor);
 
 // Set controlled motor speed in ticks/100 sec
+// NOT IMPLEMENTED
 int MOTORSpeed(int motor, int ticks);           
 
 // Read quadrature encoder [1..4]
+// NOT IMPLEMENTED
 int ENCODERRead(int quad);
 
 // Set encoder value to 0 [1..4]
+// NOT IMPLEMENTED
 int ENCODERReset(int quad);
 
 // Set PWM offsets per motor [-255...255]
@@ -408,63 +454,83 @@ int VWDone(void);
 int VWWait(void);                               
 
 // Returns number of stalled motor [1..2], 3 if both stalled, 0 if none
+// NOT IMPLEMENTED
 int VWStalled(void);                            
 
 // Set IO line [1..16] to i-n/o-ut/I-n pull-up/J-n pull-down
+// NOT IMPLEMENTED
 int DIGITALSetup(int io, char direction);       
 
 // Read and return individual input line [1..16]
+// NOT IMPLEMENTED
 int DIGITALRead(int io);                        
 
 // Read and return all 16 io lines
+// NOT IMPLEMENTED
 int DIGITALReadAll(void);                       
 
 // Write individual output [1..16] to 0 or 1
+// NOT IMPLEMENTED
 int DIGITALWrite(int io, int state);            
 
 // Read analog channel [1..8]
+// NOT IMPLEMENTED
 int ANALOGRead(int channel);                    
 
 // Read analog supply voltage in [0.01 Volt]
+// NOT IMPLEMENTED
 int ANALOGVoltage(void);                        
 
 // Record analog data (e.g. 8 for microphone) at 1kHz (non-blocking)
+// NOT IMPLEMENTED
 int ANALOGRecord(int channel, int iterations);  
 
 // Transfer previously recorded data; returns number of bytes
+// NOT IMPLEMENTED
 int ANALOGTransfer(BYTE* buffer);               
 
 // Blocking read of IRTV command
+// NOT IMPLEMENTED
 int IRTVGet(void);                              
 
 // Non-blocking read, return 0 if nothing
+// NOT IMPLEMENTED
 int IRTVRead(void);                             
 
 // Empty IRTV buffers
+// NOT IMPLEMENTED
 int IRTVFlush(void);                            
 
 // Checks to see if IRTV is activated (1) or off (0)
+// NOT IMPLEMENTED
 int IRTVGetStatus(void);                        
 
 // Start radio communication
+// NOT IMPLEMENTED
 int RADIOInit(void);                            
 
 // Get own radio ID
+// NOT IMPLEMENTED
 int RADIOGetID(void);                           
 
 // Send string (Null terminated) to ID destination
+// NOT IMPLEMENTED
 int RADIOSend(int id, char* buf);               
 
 // Wait for message, then fill in sender ID and data, returns number of chars received
+// NOT IMPLEMENTED
 int RADIOReceive(int *id_no, char* buf, int size); 
 
 // Check if message is waiting: 0 or 1 (non-blocking); -1 if error
+// NOT IMPLEMENTED
 int RADIOCheck(void);                           
 
 // Returns number of robots (incl. self) and list of IDs in network
+// NOT IMPLEMENTED
 int RADIOStatus(int IDlist[]);                  
 
 // Terminate radio communication
+// NOT IMPLEMENTED
 int RADIORelease(void);                         
 
 #endif

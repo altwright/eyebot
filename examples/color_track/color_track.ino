@@ -24,7 +24,7 @@ void setup() {
   LCDGetSize(&gLCDWidth, &gLCDHeight);
 }
 
-void DemoDriveToColor()
+void Drive2Colour()
 {
   Screen screen = SCREEN_SETTINGS_1;
   bool quit = false, ui_init = false, show_overlay = false;
@@ -620,5 +620,5 @@ void DemoDriveToColor()
 }
 
 void loop() {
-  DemoDriveToColor();
+  Drive2Colour();
 }
