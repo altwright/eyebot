@@ -97,6 +97,7 @@ static const int MAX_LIN_SPEED = 340;
 static const int MAX_ANG_SPEED = 180;
 
 static int gXPos, gYPos, gAngle;
+static int gFinalXPos, gFinalYPos, gFinalAngle;
 static volatile int gLinSpeed, gAngSpeed;
 static unsigned long gOpTotalTime, gOpStartTime;
 
@@ -122,9 +123,15 @@ static bool motorKillTimerCB(void *arg)
   analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
   analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
 
+  gXPos = gFinalXPos;
+  gYPos = gFinalYPos;
+  gAngle = gFinalAngle;
+
   gCurrentVWOp = VW_OP_UNDEFINED;
   gLinSpeed = 0;
   gAngSpeed = 0;
+  gOpStartTime = 0;
+  gOpTotalTime = 0;
 
   return true;
 }
@@ -159,6 +166,54 @@ static bool setMotorKillTimer(u64 time_ms)
     return false;
 
   return true;
+}
+
+static void calc_final_position()
+{
+  unsigned long delta = gOpTotalTime;
+
+  switch (gCurrentVWOp)
+  {
+    case VW_OP_UNDEFINED:
+    case VW_OP_STRAIGHT:
+    case VW_OP_CURVE:
+    {
+      float delta_arc = gLinSpeed * (delta / 1000.0f);
+      float eyebot_angle_rad = gAngle * M_PI / 180.0f;
+      float delta_degrees = gAngSpeed * (delta / 1000.0f);
+
+      int dx = 0, dy = 0;
+      if (gAngSpeed != 0 && delta != 0)
+      {
+        float delta_rad = delta_degrees * M_PI / 180.0f;
+        float radius = delta_arc / delta_rad;
+
+        dy = radius * sinf(eyebot_angle_rad + delta_rad);
+        dx = radius - (radius * cosf(eyebot_angle_rad + delta_rad));
+      }
+      else
+      {
+        dy = delta_arc * cosf(eyebot_angle_rad);
+        dx = delta_arc * sinf(eyebot_angle_rad);
+      }
+
+      gFinalXPos = gXPos + dx;
+      gFinalYPos = gYPos + dy;
+      gFinalAngle = gAngle + delta_degrees;
+
+      break;
+    }
+    case VW_OP_TURN:
+    {
+      float delta_degrees = gAngSpeed * (2*delta / 1000.0f);
+
+      gFinalAngle = gAngle + delta_degrees;
+
+      break;
+    }
+    default:
+      break;
+  }
 }
 
 int EYEBOTInit()
@@ -1393,7 +1448,7 @@ int VWGetPosition(int *x, int *y, int *phi)
     }
     case VW_OP_TURN:
     {
-      float delta_degrees = gAngSpeed * (delta / 1000.0f);
+      float delta_degrees = gAngSpeed * (2*delta / 1000.0f);
 
       *x = gXPos;
       *y = gYPos;
@@ -1407,6 +1462,8 @@ int VWGetPosition(int *x, int *y, int *phi)
 
   return 0;
 }
+
+
 
 int VWStraight(int dist, int lin_speed)
 {  
@@ -1434,6 +1491,8 @@ int VWStraight(int dist, int lin_speed)
   
   gOpTotalTime = time_taken;
   gCurrentVWOp = VW_OP_STRAIGHT;
+
+  calc_final_position();
 
   return 0;
 }
@@ -1465,6 +1524,8 @@ int VWTurn(int angle, int ang_speed)
 
   gOpTotalTime = time_taken;
   gCurrentVWOp = VW_OP_TURN;
+
+  calc_final_position();
 
   return 0;
 }
@@ -1509,6 +1570,8 @@ int VWCurve(int dist, int angle, int lin_speed)
 
   gOpTotalTime = time_taken;
   gCurrentVWOp = VW_OP_CURVE;
+
+  calc_final_position();
 
   return 0;
 }
