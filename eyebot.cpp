@@ -19,10 +19,10 @@
 #define PIN_RIGHT_BUTTON 14
 
 //Motor Pins
-#define PIN_LEFT_MOTOR_FORWARD 3
-#define PIN_LEFT_MOTOR_BACKWARD 10
-#define PIN_RIGHT_MOTOR_FORWARD 12
-#define PIN_RIGHT_MOTOR_BACKWARD 11
+#define PIN_LEFT_MOTOR_DIR 3
+#define PIN_LEFT_MOTOR_PWM 10
+#define PIN_RIGHT_MOTOR_DIR 11
+#define PIN_RIGHT_MOTOR_PWM 12
 
 //PSD Pin
 #define PIN_DIST_SENSOR 13
@@ -96,10 +96,10 @@ static const int MAX_LIN_SPEED = 340;
 // degrees/s
 static const int MAX_ANG_SPEED = 180;
 
-static int gXPos, gYPos, gAngle;
+static volatile int gXPos, gYPos, gAngle;
 static int gFinalXPos, gFinalYPos, gFinalAngle;
-static volatile int gLinSpeed, gAngSpeed;
-static unsigned long gOpTotalTime, gOpStartTime;
+static volatile int gLinSpeed = 0, gAngSpeed = 0;
+static unsigned long gOpTotalTime = 0, gOpStartTime = 0;
 
 static int gImgXStart = 0;
 static int gImgYStart = 0;
@@ -118,10 +118,8 @@ static COLOR rgb565To888(RGB565 col)
 
 static bool motorKillTimerCB(void *arg)
 {
-  analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
-  analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
-  analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
-  analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
+  analogWrite(PIN_LEFT_MOTOR_PWM, 0);
+  analogWrite(PIN_RIGHT_MOTOR_PWM, 0);
 
   gXPos = gFinalXPos;
   gYPos = gFinalYPos;
@@ -130,8 +128,6 @@ static bool motorKillTimerCB(void *arg)
   gCurrentVWOp = VW_OP_UNDEFINED;
   gLinSpeed = 0;
   gAngSpeed = 0;
-  gOpStartTime = 0;
-  gOpTotalTime = 0;
 
   return true;
 }
@@ -168,7 +164,7 @@ static bool setMotorKillTimer(u64 time_ms)
   return true;
 }
 
-static void calc_final_position()
+static void calcFinalPosition()
 {
   unsigned long delta = gOpTotalTime;
 
@@ -181,6 +177,8 @@ static void calc_final_position()
       float delta_arc = gLinSpeed * (delta / 1000.0f);
       float eyebot_angle_rad = gAngle * M_PI / 180.0f;
       float delta_degrees = gAngSpeed * (delta / 1000.0f);
+
+      //delta_degrees = gLinSpeed < 0 ? -1*delta_degrees : delta_degrees;
 
       int dx = 0, dy = 0;
       if (gAngSpeed != 0 && delta != 0)
@@ -222,10 +220,13 @@ int EYEBOTInit()
   //Motor init
   /////////////
 
-  analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
-  analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
-  analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
-  analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
+  analogWrite(PIN_LEFT_MOTOR_PWM, 0);
+  analogWrite(PIN_RIGHT_MOTOR_PWM, 0);
+
+  pinMode(PIN_LEFT_MOTOR_DIR, OUTPUT);
+  pinMode(PIN_RIGHT_MOTOR_DIR, OUTPUT);
+  digitalWrite(PIN_LEFT_MOTOR_DIR, HIGH);
+  digitalWrite(PIN_RIGHT_MOTOR_DIR, LOW);
 
   ////////////////////////////////////////////
   // Enable being powered from the power rail
@@ -1200,54 +1201,7 @@ int SERVORange(int servo, int low, int high)
 
 int MOTORDrive(int motor, int speed)
 {
-  if (speed < -100 || speed > 100)
-    return -1;
-
-  if (motor < 1 || motor > 2)
-    return -1;
-
-  if (gCurrentVWOp != VW_OP_UNDEFINED)
-  {
-    //There is still a background timer for
-    //an ongoing drive op that must be stopped
-    timer_pause(gTimerGroup, gMotorTimerIdx);
-    gCurrentVWOp = VW_OP_UNDEFINED;
-  }
-
-  bool reverse = speed < 0 ? true : false;
-  float percentage = reverse ? -1*speed / 100.0f : speed / 100.0f;
-
-  int pwm = 255*percentage;
-  if (pwm >= 255) pwm = 254; 
-
-  if (motor == 1)// Left
-  {
-    if (reverse)
-    {
-      analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
-      analogWrite(PIN_LEFT_MOTOR_BACKWARD, pwm);
-    }
-    else
-    {
-      analogWrite(PIN_LEFT_MOTOR_FORWARD, pwm);
-      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
-    }
-  }
-  else if (motor == 2)// Right
-  {
-    if (reverse)
-    {
-      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
-      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, pwm);
-    }
-    else
-    {
-      analogWrite(PIN_RIGHT_MOTOR_FORWARD, pwm);
-      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
-    }
-  }
-
-  return 0;
+  return -1;
 }
 
 int MOTORDriveRaw(int motor, int speed)
@@ -1297,7 +1251,10 @@ int VWSetSpeed(int lin_speed, int ang_speed)
     timer_pause(gTimerGroup, gMotorTimerIdx);
   }
 
-  // Set current eyebot position
+  analogWrite(PIN_LEFT_MOTOR_PWM, 0);
+  analogWrite(PIN_RIGHT_MOTOR_PWM, 0);
+
+  // Update current eyebot position
   int x, y, angle;
   VWGetPosition(&x, &y, &angle);
   VWSetPosition(x, y, angle);
@@ -1348,17 +1305,17 @@ int VWSetSpeed(int lin_speed, int ang_speed)
 
     if (reverse)
     {
-      analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
-      analogWrite(PIN_LEFT_MOTOR_BACKWARD, gLeftMotorPWM);
-      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
-      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, gRightMotorPWM);
+      digitalWrite(PIN_LEFT_MOTOR_DIR, LOW);
+      analogWrite(PIN_LEFT_MOTOR_PWM, gLeftMotorPWM);
+      digitalWrite(PIN_RIGHT_MOTOR_DIR, HIGH);
+      analogWrite(PIN_RIGHT_MOTOR_PWM, gRightMotorPWM);
     }
     else
     {
-      analogWrite(PIN_LEFT_MOTOR_FORWARD, gLeftMotorPWM);
-      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
-      analogWrite(PIN_RIGHT_MOTOR_FORWARD, gRightMotorPWM);
-      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
+      digitalWrite(PIN_LEFT_MOTOR_DIR, HIGH);
+      analogWrite(PIN_LEFT_MOTOR_PWM, gLeftMotorPWM);
+      digitalWrite(PIN_RIGHT_MOTOR_DIR, LOW);
+      analogWrite(PIN_RIGHT_MOTOR_PWM, gRightMotorPWM);
     }
   }
   else
@@ -1368,22 +1325,21 @@ int VWSetSpeed(int lin_speed, int ang_speed)
 
     if (clockwise)
     {
-      analogWrite(PIN_LEFT_MOTOR_FORWARD, 255 * ang_speed_percentage);
-      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 0);
-      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 0);
-      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 255 * ang_speed_percentage);
+      digitalWrite(PIN_LEFT_MOTOR_DIR, HIGH);
+      analogWrite(PIN_LEFT_MOTOR_PWM, 255 * ang_speed_percentage);
+      digitalWrite(PIN_RIGHT_MOTOR_DIR, HIGH);
+      analogWrite(PIN_RIGHT_MOTOR_PWM, 255 * ang_speed_percentage);
     }
     else
     {
-      analogWrite(PIN_LEFT_MOTOR_FORWARD, 0);
-      analogWrite(PIN_LEFT_MOTOR_BACKWARD, 255 * ang_speed_percentage);
-      analogWrite(PIN_RIGHT_MOTOR_FORWARD, 255 * ang_speed_percentage);
-      analogWrite(PIN_RIGHT_MOTOR_BACKWARD, 0);
+      digitalWrite(PIN_LEFT_MOTOR_DIR, LOW);
+      analogWrite(PIN_LEFT_MOTOR_PWM, 255 * ang_speed_percentage);
+      digitalWrite(PIN_RIGHT_MOTOR_DIR, LOW);
+      analogWrite(PIN_RIGHT_MOTOR_PWM, 255 * ang_speed_percentage);
     }
   }
 
   gOpStartTime = millis();
-  gOpTotalTime = 0;//indefinite by default
 
   return 0;
 }     
@@ -1424,6 +1380,8 @@ int VWGetPosition(int *x, int *y, int *phi)
       float delta_arc = gLinSpeed * (delta / 1000.0f);
       float eyebot_angle_rad = gAngle * M_PI / 180.0f;
       float delta_degrees = gAngSpeed * (delta / 1000.0f);
+
+      //delta_degrees = gLinSpeed < 0 ? -1*delta_degrees : delta_degrees;
 
       int dx = 0, dy = 0;
       if (gAngSpeed != 0 && delta != 0)
@@ -1492,7 +1450,7 @@ int VWStraight(int dist, int lin_speed)
   gOpTotalTime = time_taken;
   gCurrentVWOp = VW_OP_STRAIGHT;
 
-  calc_final_position();
+  calcFinalPosition();
 
   return 0;
 }
@@ -1525,37 +1483,32 @@ int VWTurn(int angle, int ang_speed)
   gOpTotalTime = time_taken;
   gCurrentVWOp = VW_OP_TURN;
 
-  calc_final_position();
+  calcFinalPosition();
 
   return 0;
 }
 
 int VWCurve(int dist, int angle, int lin_speed)
 {
-  if (lin_speed <= 0)
-    return -1;
+  if (lin_speed <= 0) return -1;
   
-  if (lin_speed > MAX_LIN_SPEED)
-    lin_speed = MAX_LIN_SPEED;
+  if (lin_speed > MAX_LIN_SPEED) lin_speed = MAX_LIN_SPEED;
   
   bool reverse = dist < 0 ? true : false;
   bool clockwise = angle >= 0 ? true : false;
 
-  if (reverse)
-    dist *= -1;
+  if (reverse) dist *= -1;
 
   float time_taken = dist / (float)lin_speed;
   int ang_speed = angle / time_taken;
 
   if (clockwise)
   {
-    if (ang_speed > MAX_ANG_SPEED)
-      ang_speed = MAX_ANG_SPEED;
+    if (ang_speed > MAX_ANG_SPEED) ang_speed = MAX_ANG_SPEED;
   }
   else
   {
-    if (ang_speed < -1*MAX_ANG_SPEED)
-      ang_speed = -1*MAX_ANG_SPEED;
+    if (ang_speed < -1*MAX_ANG_SPEED) ang_speed = -1*MAX_ANG_SPEED;
   }
 
   if (reverse)
@@ -1571,7 +1524,7 @@ int VWCurve(int dist, int angle, int lin_speed)
   gOpTotalTime = time_taken;
   gCurrentVWOp = VW_OP_CURVE;
 
-  calc_final_position();
+  calcFinalPosition();
 
   return 0;
 }

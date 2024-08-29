@@ -20,14 +20,18 @@ BYTE gEdgeImg[QQVGA_PIXELS];
 
 Demo gSelectedDemo = DEMO_UNDEFINED;
 
-int gLinSpeed = 340, gAngSpeed = 0;
+int gLinSpeed = 250, gAngSpeed = 0;
 int gLeftMotorOffset = 0, gRightMotorOffset = 0;
 
 int gStraightDist = 340;
-int gStraightLinSpeed = 340;
+int gStraightLinSpeed = 250;
 
 int gTurnFinalAng = 180;
-int gTurnAngSpeed = 180;
+int gTurnAngSpeed = 90;
+
+int gCurveLinSpeed = 250;
+int gCurveFinalAng = 90;
+int gCurveDist = 340;
 
 int gScreenIdx = 0;
 const int MAX_SCREENS = 1,
@@ -531,9 +535,9 @@ void vw_set_speed_demo()
           int xpos, ypos, angle;
           VWGetPosition(&xpos, &ypos, &angle);
 
-          LCDSetPrintf(XPOS_Y + 20, X_MARGIN, "%d mm ", xpos);
-          LCDSetPrintf(YPOS_Y + 20, X_MARGIN, "%d mm ", ypos);
-          LCDSetPrintf(ANGLE_Y + 20, X_MARGIN, "%d deg", angle);
+          LCDSetPrintf(XPOS_Y + 20, X_MARGIN, "%d mm    ", xpos);
+          LCDSetPrintf(YPOS_Y + 20, X_MARGIN, "%d mm    ", ypos);
+          LCDSetPrintf(ANGLE_Y + 20, X_MARGIN, "%d deg     ", angle);
 
           int x, y;
           KEYReadXY(&x, &y);
@@ -723,10 +727,10 @@ void vw_straight_demo()
 
           int dist = VWRemain();
 
-          LCDSetPrintf(XPOS_Y + 20, X_MARGIN, "%d mm ", xpos);
-          LCDSetPrintf(YPOS_Y + 20, X_MARGIN, "%d mm ", ypos);
-          LCDSetPrintf(ANGLE_Y + 20, X_MARGIN, "%d deg", angle);
-          LCDSetPrintf(REMAIN_Y + 20, X_MARGIN, "%d mm ", dist < 0 ? 0 : dist);
+          LCDSetPrintf(XPOS_Y + 20, X_MARGIN, "%d mm     ", xpos);
+          LCDSetPrintf(YPOS_Y + 20, X_MARGIN, "%d mm     ", ypos);
+          LCDSetPrintf(ANGLE_Y + 20, X_MARGIN, "%d deg    ", angle);
+          LCDSetPrintf(REMAIN_Y + 20, X_MARGIN, "%d mm     ", dist < 0 ? 0 : dist);
 
           int x, y;
           KEYReadXY(&x, &y);
@@ -911,9 +915,229 @@ void vw_turn_demo()
           int xpos, ypos, angle;
           VWGetPosition(&xpos, &ypos, &angle);
 
-          LCDSetPrintf(XPOS_Y + 20, X_MARGIN, "%d mm ", xpos);
-          LCDSetPrintf(YPOS_Y + 20, X_MARGIN, "%d mm ", ypos);
-          LCDSetPrintf(ANGLE_Y + 20, X_MARGIN, "%d deg", angle);
+          LCDSetPrintf(XPOS_Y + 20, X_MARGIN, "%d mm     ", xpos);
+          LCDSetPrintf(YPOS_Y + 20, X_MARGIN, "%d mm     ", ypos);
+          LCDSetPrintf(ANGLE_Y + 20, X_MARGIN, "%d deg      ", angle);
+
+          int x, y;
+          KEYReadXY(&x, &y);
+
+          if (x >= 0 || y >= 0)
+          {
+            VWSetSpeed(0, 0);
+            delay(INPUT_DELAY_MS);
+            phase = PHASE_SETTINGS;
+          }
+        }
+
+        break;
+      }
+      case PHASE_EXIT:
+        exit = true;
+        break;
+    }
+  }
+}
+
+void vw_curve_demo()
+{
+  enum {
+    PHASE_SETTINGS,
+    PHASE_RUNNING,
+    PHASE_EXIT
+  } phase = PHASE_SETTINGS;
+
+  bool exit = false;
+
+  while (!exit)
+  {
+    switch (phase)
+    {
+      case PHASE_SETTINGS:
+      {
+        LCDClear();
+
+        LCDSetFontSize(1);
+        LCDSetColor(WHITE, BLACK);
+
+        const int LIN_LABEL_X = X_MARGIN,
+                  LIN_LABEL_Y = Y_MARGIN,
+                  LIN_Y1 = LIN_LABEL_Y + LABEL_Y_PADDING,
+                  LIN_Y2 = LIN_Y1 + BUTTON_HEIGHT;
+
+        LCDSetPrintf(LIN_LABEL_Y, LIN_LABEL_X, "Lin. Speed (mm/s)");
+        LCDArea(MINUS_X1, LIN_Y1, MINUS_X2, LIN_Y2, WHITE);
+        LCDArea(MINUS_X1 + MINUS_SIGN_X1_OFF, LIN_Y1 + MINUS_SIGN_Y1_OFF, MINUS_X1 + MINUS_SIGN_X2_OFF, LIN_Y1 + MINUS_SIGN_Y2_OFF, BLACK);
+        LCDArea(PLUS_X1, LIN_Y1, PLUS_X2, LIN_Y2, WHITE);
+        LCDArea(PLUS_X1 + PLUS_SIGN_HOR_X1_OFF, LIN_Y1 + PLUS_SIGN_HOR_Y1_OFF, PLUS_X1 + PLUS_SIGN_HOR_X2_OFF, LIN_Y1 + PLUS_SIGN_HOR_Y2_OFF, BLACK);
+        LCDArea(PLUS_X1 + PLUS_SIGN_VER_X1_OFF, LIN_Y1 + PLUS_SIGN_VER_Y1_OFF, PLUS_X1 + PLUS_SIGN_VER_X2_OFF, LIN_Y1 + PLUS_SIGN_VER_Y2_OFF, BLACK);
+
+        const int ANG_LABEL_X = X_MARGIN,
+                  ANG_LABEL_Y = LIN_Y2 + BUTTON_Y_PADDING,
+                  ANG_Y1 = ANG_LABEL_Y + LABEL_Y_PADDING,
+                  ANG_Y2 = ANG_Y1 + BUTTON_HEIGHT;
+
+        LCDSetPrintf(ANG_LABEL_Y, ANG_LABEL_X, "Final Ang. (deg.)");
+        LCDArea(MINUS_X1, ANG_Y1, MINUS_X2, ANG_Y2, WHITE);
+        LCDArea(MINUS_X1 + MINUS_SIGN_X1_OFF, ANG_Y1 + MINUS_SIGN_Y1_OFF, MINUS_X1 + MINUS_SIGN_X2_OFF, ANG_Y1 + MINUS_SIGN_Y2_OFF, BLACK);
+        LCDArea(PLUS_X1, ANG_Y1, PLUS_X2, ANG_Y2, WHITE);
+        LCDArea(PLUS_X1 + PLUS_SIGN_HOR_X1_OFF, ANG_Y1 + PLUS_SIGN_HOR_Y1_OFF, PLUS_X1 + PLUS_SIGN_HOR_X2_OFF, ANG_Y1 + PLUS_SIGN_HOR_Y2_OFF, BLACK);
+        LCDArea(PLUS_X1 + PLUS_SIGN_VER_X1_OFF, ANG_Y1 + PLUS_SIGN_VER_Y1_OFF, PLUS_X1 + PLUS_SIGN_VER_X2_OFF, ANG_Y1 + PLUS_SIGN_VER_Y2_OFF, BLACK);
+
+        const int DIST_LABEL_X = X_MARGIN,
+                  DIST_LABEL_Y = ANG_Y2 + BUTTON_Y_PADDING,
+                  DIST_Y1 = DIST_LABEL_Y + LABEL_Y_PADDING,
+                  DIST_Y2 = DIST_Y1 + BUTTON_HEIGHT;
+
+        LCDSetPrintf(DIST_LABEL_Y, DIST_LABEL_X, "Distance (mm)");
+        LCDArea(MINUS_X1, DIST_Y1, MINUS_X2, DIST_Y2, WHITE);
+        LCDArea(MINUS_X1 + MINUS_SIGN_X1_OFF, DIST_Y1 + MINUS_SIGN_Y1_OFF, MINUS_X1 + MINUS_SIGN_X2_OFF, DIST_Y1 + MINUS_SIGN_Y2_OFF, BLACK);
+        LCDArea(PLUS_X1, DIST_Y1, PLUS_X2, DIST_Y2, WHITE);
+        LCDArea(PLUS_X1 + PLUS_SIGN_HOR_X1_OFF, DIST_Y1 + PLUS_SIGN_HOR_Y1_OFF, PLUS_X1 + PLUS_SIGN_HOR_X2_OFF, DIST_Y1 + PLUS_SIGN_HOR_Y2_OFF, BLACK);
+        LCDArea(PLUS_X1 + PLUS_SIGN_VER_X1_OFF, DIST_Y1 + PLUS_SIGN_VER_Y1_OFF, PLUS_X1 + PLUS_SIGN_VER_X2_OFF, DIST_Y1 + PLUS_SIGN_VER_Y2_OFF, BLACK);
+
+        LCDSetFontSize(3);
+        LCDSetColor(BLACK, WHITE);
+
+        const int START_X1 = X_MARGIN,
+                  START_X2 = LCD_WIDTH - 5,
+                  START_Y1 = DIST_Y2 + 5,
+                  START_Y2 = START_Y1 + BUTTON_HEIGHT;
+        
+        LCDArea(START_X1, START_Y1, START_X2, START_Y2, WHITE);
+        LCDSetPrintf(START_Y1 + 9, START_X1 + 40, "START");
+
+        const int EXIT_X1 = START_X1,
+                  EXIT_X2 = START_X2,
+                  EXIT_Y1 = START_Y2 + 5,
+                  EXIT_Y2 = EXIT_Y1 + BUTTON_HEIGHT;
+
+        LCDArea(EXIT_X1, EXIT_Y1, EXIT_X2, EXIT_Y2, WHITE);
+        LCDSetPrintf(EXIT_Y1 + 9, EXIT_X1 + 47, "EXIT");
+
+        while (phase == PHASE_SETTINGS)
+        {
+          LCDSetFontSize(2);
+          LCDSetColor(WHITE, BLACK);
+
+          LCDSetPrintf(LIN_Y1 + VALUE_Y_OFF, VALUE_X, "%d  ", gCurveLinSpeed);
+          LCDSetPrintf(ANG_Y1 + VALUE_Y_OFF, VALUE_X, "%d  ", gCurveFinalAng);
+          LCDSetPrintf(DIST_Y1 + VALUE_Y_OFF, VALUE_X, "%d  ", gCurveDist);
+
+          int x, y;
+          KEYReadXY(&x, &y);
+
+          if (x >= VALUE_X && x <= MINUS_X1 - 5)
+          {
+            if (y >= ANG_Y1 && y <= ANG_Y2)
+            {
+              gCurveFinalAng *= -1;
+              delay(INPUT_DELAY_MS);
+            }
+            else if (y >= DIST_Y1 && y <= DIST_Y2)
+            {
+              gCurveDist *= -1;
+              delay(INPUT_DELAY_MS);
+            }
+          }
+          else if (x >= MINUS_X1 && x <= MINUS_X2)
+          {
+            if (y >= LIN_Y1 && y <= LIN_Y2)
+            {
+              gCurveLinSpeed -= 10;
+              if (gCurveLinSpeed <= 0) gCurveLinSpeed = 10;
+              delay(INPUT_DELAY_MS);
+            }
+            else if (y >= ANG_Y1 && y <= ANG_Y2)
+            {
+              gCurveFinalAng -= 10;
+              delay(INPUT_DELAY_MS);
+            }
+            else if (y >= DIST_Y1 && y <= DIST_Y2)
+            {
+              gCurveDist -= 10;
+              delay(INPUT_DELAY_MS);
+            }
+          }
+          else if (x >= PLUS_X1 && x <= PLUS_X2)
+          {
+            if (y >= LIN_Y1 && y <= LIN_Y2)
+            {
+              gCurveLinSpeed += 10;
+              delay(INPUT_DELAY_MS);
+            }
+            else if (y >= ANG_Y1 && y <= ANG_Y2)
+            {
+              gCurveFinalAng += 10;
+              delay(INPUT_DELAY_MS);
+            }
+            else if (y >= DIST_Y1 && y <= DIST_Y2)
+            {
+              gStraightDist += 10;
+              delay(INPUT_DELAY_MS);
+            }
+          }
+
+          if (x >= START_X1 && x <= START_X2 && y >= START_Y1 && y <= START_Y2)
+          {
+            LCDSetFontSize(3);
+            LCDSetColor(RED, WHITE);
+            LCDSetPrintf(START_Y1 + 9, START_X1 + 40, "START");
+            delay(INPUT_DELAY_MS);
+            phase = PHASE_RUNNING;
+          }
+          
+          if (x >= EXIT_X1 && x <= EXIT_X2 && y >= EXIT_Y1 && y <= EXIT_Y2)
+          {
+            LCDSetFontSize(3);
+            LCDSetColor(RED, WHITE);
+            LCDSetPrintf(EXIT_Y1 + 9, EXIT_X1 + 47, "EXIT");
+            delay(INPUT_DELAY_MS);
+            phase = PHASE_EXIT;
+          }
+        }
+
+        break;
+      }
+      case PHASE_RUNNING:
+      {
+        LCDClear();
+        LCDArea(0, 0, LCD_WIDTH, LCD_HEIGHT, RED);
+
+        const int Y_PADDING = 40,
+                  XPOS_Y = Y_MARGIN,
+                  YPOS_Y = XPOS_Y + Y_PADDING,
+                  ANGLE_Y = YPOS_Y + Y_PADDING,
+                  REMAIN_Y = ANGLE_Y + Y_PADDING;
+        
+        LCDSetFontSize(4);
+        LCDSetColor(WHITE, RED);
+        LCDSetPrintf(LCD_HEIGHT - 45, 25, "RESET");
+
+        LCDSetFontSize(2);
+        LCDSetColor(WHITE, RED);
+        LCDSetPrintf(XPOS_Y, X_MARGIN, "X POS:");
+        LCDSetPrintf(YPOS_Y, X_MARGIN, "Y POS:");
+        LCDSetPrintf(ANGLE_Y, X_MARGIN, "ANGLE:");
+        LCDSetPrintf(REMAIN_Y, X_MARGIN, "REMAINING:");
+
+        if (int err = VWCurve(gCurveDist, gCurveFinalAng, gCurveLinSpeed))
+        {
+          phase = PHASE_SETTINGS;
+          break;
+        }
+
+        while (phase == PHASE_RUNNING)
+        {
+          int xpos, ypos, angle;
+          VWGetPosition(&xpos, &ypos, &angle);
+
+          int dist = VWRemain();
+
+          LCDSetPrintf(XPOS_Y + 20, X_MARGIN, "%d mm     ", xpos);
+          LCDSetPrintf(YPOS_Y + 20, X_MARGIN, "%d mm     ", ypos);
+          LCDSetPrintf(ANGLE_Y + 20, X_MARGIN, "%d deg    ", angle);
+          LCDSetPrintf(REMAIN_Y + 20, X_MARGIN, "%d mm     ", dist < 0 ? 0 : dist);
 
           int x, y;
           KEYReadXY(&x, &y);
@@ -972,6 +1196,9 @@ void loop() {
             break;
           case 3:
             vw_turn_demo();
+            break;
+          case 4:
+            vw_curve_demo();
             break;
           default:
             break;
