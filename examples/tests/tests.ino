@@ -528,7 +528,11 @@ void vw_set_speed_demo()
         LCDSetPrintf(YPOS_Y, X_MARGIN, "Y POS:");
         LCDSetPrintf(ANGLE_Y, X_MARGIN, "ANGLE:");
 
-        VWSetSpeed(gLinSpeed, gAngSpeed);
+        if (int err = VWSetSpeed(gLinSpeed, gAngSpeed))
+        {
+          phase = PHASE_SETTINGS;
+          break;
+        }
 
         while (phase == PHASE_RUNNING)
         {
