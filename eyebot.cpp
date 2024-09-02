@@ -207,7 +207,7 @@ static void calcDeltaPosition(int delta_ms, int *dx, int *dy, int *dphi)
     {
       float delta_deg = gAngSpeed * (2*delta_ms / 1000.0f);
 
-      *dphi = gAngle + delta_deg;
+      *dphi = delta_deg;
 
       break;
     }
