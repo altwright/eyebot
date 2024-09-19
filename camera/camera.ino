@@ -30,6 +30,10 @@
 #define QQVGA_HEIGHT 120
 #define QQVGA_RGB565_BUFFER_SIZE QQVGA_WIDTH*QQVGA_HEIGHT*sizeof(uint16_t)
 
+/*
+Due to an unknown max data size bottleneck per SPI transaction,
+a single QQVGA image is divided into 8 segments of 4800 bytes each.
+*/
 #define MAX_TX_SEGMENT_SIZE 4800
 #define NUM_TX_SEGMENTS 8
 
@@ -52,7 +56,7 @@ void setup() {
 
   //Configuration for the SPI bus
   spi_bus_config_t buscfg = {
-      .mosi_io_num = -1,
+      .mosi_io_num = -1,// No data input from master
       .miso_io_num = SPI_MISO_PIN,
       .sclk_io_num = SPI_SCLK_PIN,
       .quadwp_io_num = -1,
@@ -75,7 +79,7 @@ void setup() {
   pinMode(SPI_CS_PIN, INPUT_PULLUP);
 
   pinMode(CAM_SIGNAL_PIN, OUTPUT);
-  digitalWrite(CAM_SIGNAL_PIN, HIGH);//TTGO pin will be pullup
+  digitalWrite(CAM_SIGNAL_PIN, HIGH);//T-Display-S3 pin will be pullup
   
   //Initialize SPI slave interface
   esp_err_t ret = spi_slave_initialize(HSPI_HOST, &buscfg, &slvcfg, SPI_DMA_CH_AUTO);
@@ -101,9 +105,14 @@ void setup() {
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
+  /*
+  JPEG capture is much faster than RGB565 capture (reaching 25-30 fps), but the capture
+  is unreliable and often causes the ESP32-CAM to crash for high detail scenes. The JPEG image quality is poor
+  as well.
+  */
   config.pixel_format = PIXFORMAT_RGB565; //YUV422,GRAYSCALE,RGB565,JPEG
   config.frame_size = FRAMESIZE_QQVGA;
-  config.fb_count = 3;
+  config.fb_count = 3;// Triple buffer captured images
   config.grab_mode = CAMERA_GRAB_LATEST;
   config.fb_location = CAMERA_FB_IN_PSRAM;
   config.jpeg_quality = 0;
@@ -122,6 +131,10 @@ void setup() {
   sensor->set_vflip(sensor, 0);          // 0 = disable , 1 = enable
   sensor->set_colorbar(sensor, 0);       // 0 = disable , 1 = enable
 
+  /*
+  Data intended to be sent in an SPI transaction needs to be read from DMA
+  enabled memory.
+  */
   dma_bytes = (uint8_t*)heap_caps_aligned_alloc(sizeof(uint32_t), QQVGA_RGB565_BUFFER_SIZE, MALLOC_CAP_DMA);
   if(!dma_bytes)
     Serial.printf("Failed to allocate DMA capable memory\n");
@@ -136,6 +149,12 @@ void loop() {
 
   uint16_t *img = (uint16_t*)img_bytes;
 
+  /* 
+  RGB565 image returned in framebuffer is in big-endian order
+  for some unknown reason initially, which is a problem that does
+  not exist for returned JPEG images. RGB565 pixels must therefore
+  be converted to little-endian byte order individually.
+  */
   for (int y = 0; y < QQVGA_HEIGHT; y++)
   {
     for (int x = 0; x < QQVGA_WIDTH; x++)
@@ -152,10 +171,11 @@ void loop() {
   for (int i = 0; i < NUM_TX_SEGMENTS; i++)
   {
     spi_slave_transaction_t t = {};
-    t.length = MAX_TX_SEGMENT_SIZE * 8;
+    t.length = MAX_TX_SEGMENT_SIZE * 8;// Number of bits, not bytes
     t.tx_buffer = dma_bytes + i*MAX_TX_SEGMENT_SIZE;
     t.rx_buffer = NULL;
 
+    // Blocks until master initiates the SPI transaction
     esp_err_t err = spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
     assert(err == ESP_OK);
   }

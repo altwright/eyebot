@@ -1,4 +1,6 @@
-# Wiring
+# EyeBot Assembly
+
+## EyeBot Wiring Connections
 
 | T-Display-S3 GPIO Pin | ESP32-CAM GPIO Pin |
 |-----------------------|-----------------------|
@@ -7,34 +9,52 @@
 | 1 | 3 |
 | 2 | 1 |
 
-| T-Display-S3 GPIO Pin | Motor Driver Pin |
+| T-Display-S3 GPIO Pin | Makerverse 2 Channel Motor Driver Pin |
 |-----------------------|-----------------|
-| 3 | B-1A |
-| 10 | B-1B |
-| 12 | A-1B |
-| 11 | A-1A |
+| 3 | DIR B |
+| 10 | PWM B |
+| 11 | DIR A | 
+| 12 | PWM A |
 
 | T-Display-S3 GPIO Pin | Analog Distance Sensor |
 |-----------------------|------------------------|
 | 13 | Data Output |
 
-# Installation
+## EyeBot Pinout Diagram
 
-To install this library, just place this entire folder as a subfolder in your
-Arduino libraries folder for your respective platform.
+![EyeBot Pinout Diagram](./pinouts/eyebot.png)
 
-The TFT_eSPI and TouchLib libraries must also be copied from this repo's ```libs``` folder into to the Arduino libraries folder.
+# EyeBot Software Library Installation
 
-# Usage
+To install the EyeBot software library, either copy the entire folder this repo is contained in into the
+Arduino libraries folder on your respective platform, or if this repo is entirely contained within a `.zip` file, install it by opening Arduino IDE and selecting the series of options from the toolbar menu `Sketch > Include Library > Add .ZIP Library`.
 
-## T-Display-S3
+Similarly, the custom ```TFT_eSPI``` and ```TouchLib``` libraries found in the `libs` directory of this repo **must** also be installed within Arduino IDE by selecting the series of options from the toolbar menu `Sketch > Include Library > Add .ZIP Library`, and then selecting the `.zip` files found within the `libs` directory respectively.
+
+# EyeBot Usage
+
+## Upload the required EyeBot program to the ESP32-CAM
+
+Open the `camera.ino` project found under the `camera` directory of this repo within Arduino IDE, set the board-type to `AI-Thinker ESP32-CAM` with the default settings under `Tools`, and then upload the program to the ESP32-CAM.
+
+When new code is uploaded to the T-Display-S3 while both the T-Display-S3 and the ESP32-CAM are on-board the EyeBot, the image that the ESP32-CAM returns will most likely be visually split in two and out of sync. Powering the EyeBot off and on again should fix this.
+
+### ESP32-CAM Pinout Diagram
+
+![ESP32-CAM Pinout Diagram](./pinouts/esp32-cam.png)
+
+### Mitigating Image Interference
+
+To mitigate interference in images returned from the ESP32-CAM due to voltage drops created by the motors stalling or turning over from a stationary state, place a **16V, 220 uF capacitor** along the power rail connecting the ESP32-CAM to the T-Display-S3's 5V output pin, as depicted in the above pinout diagram for the EyeBot.
+
+## Uploading a program to the T-Display-S3
 
 Add...
 
 ```#include <eyebot.h>```
 
-... to your Arduino ```.ino``` sketch and set the board type as "ESP32S3 Dev Module",
-with the settings under the "Tools" dropdown menu adjusted to:
+... to the top of your Arduino ```.ino``` sketch and set the board type as `ESP32S3 Dev Module`,
+with the settings under the toolbar menu option `Tools` adjusted to:
 
 | Arduino IDE Setting                  | Value                             |
 | ------------------------------------ | --------------------------------- |
@@ -54,18 +74,22 @@ with the settings under the "Tools" dropdown menu adjusted to:
 | PSRAM                                | **OPI PSRAM**                     |
 | Upload Mode                          | **UART0/Hardware CDC**            |
 | Upload Speed                         | 921600                            |
-| USB Mode                             | **CDC and JTAG**                  |
+| USB Mode                             | **Hardware CDC and JTAG**                  |
 
-## ESP32-CAM
+Bold entries reflect options that are non-default.
 
-Set board-type to "AI-Thinker ESP32-CAM" and upload ```camera.ino```. 
+`EYEBOTInit()` must be called before any other library functions declared in `eyebot.h` are called in the `setup()` function
+of the `.ino` sketch.
 
-When new code is uploaded to the T-Display-S3 while both the T-Display-S3 and the ESP32-CAM are on-board the EyeBot, the image that the ESP32-CAM returns will most likely be out of sync. Disconnecting the EyeBot from power and then reconnecting it should fix this.
+### T-Display-S3 Pinout Diagram
 
-# Examples
+![T-Display-S3 Pinout Diagram](./pinouts/t-display-s3-touch.png)
+
+# Example Programs
 
 | Example name | Description |
 | ------------ | ----------- |
-| color_track | After sampling a pixel colour in the EyeBot's view, the EyeBot drives toward the centre-point of the largest object in its view whose colour falls within the specified HSI threshold, all the while avoiding collisions. |
-| ultrafast_lane | A lane-based navigation demo that detects lanes using the ["Ultrafast" line detector](https://www.spiedigitallibrary.org/journals/journal-of-electronic-imaging/volume-31/issue-4/043019/Ultrafast-line-detector/10.1117/1.JEI.31.4.043019.short) method. |
-| color_lane | A lane-based navigation demo that detects lanes using the ["Color-Based Segmentation"](https://ieeexplore.ieee.org/document/1505186) method. |
+| tests         | Tests specific features of the EyeBot, including the camera, driving functions, and position estimation. |
+| color_track | After sampling a pixel colour in the EyeBot's view, the EyeBot can drive towards the centre-point of the largest object in its view whose colour falls within the specified HSI threshold, all the while avoiding head-on collisions. |
+| ultrafast_lane | A lane-based navigation demo that detects lanes using the ["Ultrafast" line detector](https://www.spiedigitallibrary.org/journals/journal-of-electronic-imaging/volume-31/issue-4/043019/Ultrafast-line-detector/10.1117/1.JEI.31.4.043019.short) method. Can navigate a complete lap of the UWA Robotics Lab test circuit by staying within the solid lane markings. |
+| color_lane | Unfinished, currently shows a debug screen. |

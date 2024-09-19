@@ -1,4 +1,4 @@
-#define TOUCH_MODULES_CST_SELF
+#define TOUCH_MODULES_CST_SELF // Essential for the touchscreen
 #include "eyebot.h"
 #include <Arduino.h>
 #include <math.h>
@@ -8,43 +8,52 @@
 #include <TouchLib.h>
 #include <Wire.h>
 
-//Camera Pins
+// ESP32-CAM connection pins
 #define PIN_SPI_MISO 43
 #define PIN_SPI_CS 44
 #define PIN_SPI_SCLK 1
 #define PIN_CAM_SIGNAL 2
 
-//Button Pins
+// Physical button pins
 #define PIN_LEFT_BUTTON 0
 #define PIN_RIGHT_BUTTON 14
 
-//Motor Pins
+// Makerverse 2 channel motor driver connection pins
 #define PIN_LEFT_MOTOR_DIR 3
 #define PIN_LEFT_MOTOR_PWM 10
 #define PIN_RIGHT_MOTOR_DIR 11
 #define PIN_RIGHT_MOTOR_PWM 12
 
-//PSD Pin
+// PSD analogue distance input pin
 #define PIN_DIST_SENSOR 13
 
-//Touch Pins
+// Touchscreen pins
 #define PIN_IIC_SCL                  17
 #define PIN_IIC_SDA                  18
-#define PIN_TOUCH_INT                16
+#define PIN_TOUCH_INT                16 // No interrupts are currently attached to this pin
 #define PIN_TOUCH_RES                21
 
 typedef uint32_t u32;
 typedef uint64_t u64;
+// The pixels received from the camera and passed through to the
+// TFT_eSPI display library are in 16-bit RGB565 format
 typedef uint16_t RGB565;
 
+// Due to a maximum data size for individual SPI transactions,
+// whose value or origin is unknown, a QQVGA image is delivered
+// from the ESP32-CAM in eight individual SPI transactions of 
+// size 4800 bytes.
 #define CAM_NUM_IMAGE_SEGMENTS 8
 #define MAX_RX_SEGMENT_SIZE 4800
 
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
 
+// Used for the RGB888 to HSI conversion
 #define INTENSITY_THRESHOLD 10
 
+// Used for the look-up table of converting raw analogue values
+// from the distance sensor to approximate distances in mm.
 #define RAW_DISTANCE_PAIR_COUNT 25
 
 #define LCD_WIDTH 170
@@ -53,6 +62,9 @@ typedef uint16_t RGB565;
 #define QQVGA_WIDTH 160
 #define QQVGA_HEIGHT 120
 
+// If one of the eight individual SPI transactions expected
+// from the ESP32-CAM is not delivered within 500 ms, then
+// we return an entirely blank image to the user.
 #define CAM_TIMEOUT_MS 500 
 
 struct RawDistancePair
@@ -61,6 +73,8 @@ struct RawDistancePair
   int distance;//mm
 };
 
+// Used for identifying which position calculation
+// method we need to use.
 enum VWOperation
 {
   VW_OP_UNDEFINED,
@@ -92,14 +106,14 @@ static int gLeftMotorPWM;
 static int gRightMotorPWM ;
 
 // mm/s
-static const int MAX_LIN_SPEED = 340;
+static const int MAX_LIN_SPEED = 500;
 // degrees/s
-static const int MAX_ANG_SPEED = 180;
+static const int MAX_ANG_SPEED = 225;
 
-static volatile int gXPos, gYPos, gAngle;
-static int gFinalXPos, gFinalYPos, gFinalAngle;
-static volatile int gLinSpeed = 0, gAngSpeed = 0;
-static unsigned long gOpTotalTime = 0, gOpStartTime = 0;
+static volatile int gXPos, gYPos, gAngle;// Tracks the current position and orientation
+static int gFinalXPos, gFinalYPos, gFinalAngle;// Records the final predicted position and orientation for a VW finite operation
+static volatile int gLinSpeed = 0, gAngSpeed = 0;// Records the current linear and angular speed set by a VW operation
+static unsigned long gOpTotalTime = 0, gOpStartTime = 0;// Records the total length of time for an operation, and the start time of an operation
 
 static int gImgXStart = 0;
 static int gImgYStart = 0;
@@ -116,6 +130,9 @@ static COLOR rgb565To888(RGB565 col)
   return gTFT.color16to24(col);
 }
 
+// An interrupt that's invoked when the time runs out for a finite VW operation.
+// If this function is too long or invokes a user-defined function, it causes
+// the T-Display-S3 to crash due to undefined behaviour.
 static bool motorKillTimerCB(void *arg)
 {
   analogWrite(PIN_LEFT_MOTOR_PWM, 0);
@@ -132,6 +149,8 @@ static bool motorKillTimerCB(void *arg)
   return true;
 }
 
+// The TFT_eSPI display library expects all the RGB565 pixels
+// it receives, and returns, to be in big-endian byte order.
 static void rgb565SwapEndianess(RGB565 *hue)
 {
   if (!hue)
@@ -142,6 +161,8 @@ static void rgb565SwapEndianess(RGB565 *hue)
   *hue |= lower;
 }
 
+// Sets the timer until the above motorKillTimerCB() function is invoked as
+// an interrupt.
 static bool setMotorKillTimer(u64 time_ms)
 {
   esp_err_t err;
@@ -151,7 +172,7 @@ static bool setMotorKillTimer(u64 time_ms)
   if (err = timer_set_counter_value(gTimerGroup, gMotorTimerIdx, 0))
     return false;
 
-  //Assumes 2000 increments per s
+  //Assumes 2000 increments of the timer counter per s
   if (err = timer_set_alarm_value(gTimerGroup, gMotorTimerIdx, 2*(u64)time_ms))
     return false;
 
@@ -164,6 +185,10 @@ static bool setMotorKillTimer(u64 time_ms)
   return true;
 }
 
+// This calculates the change in position and orientation over a period of time
+// as defined by the EyeBot's linear and angular speed.
+// Due to the lack of encoders in the ESP32 EyeBot's motors, major trigonometric
+// heuristics have been performed here.
 static void calcDeltaPosition(int delta_ms, int *dx, int *dy, int *dphi)
 {
   *dx = 0;
@@ -176,25 +201,33 @@ static void calcDeltaPosition(int delta_ms, int *dx, int *dy, int *dphi)
     case VW_OP_STRAIGHT:
     case VW_OP_CURVE:
     {
-      float delta_arc = gLinSpeed * (delta_ms / 1000.0f);
-      float eyebot_angle_rad = gAngle * M_PI / 180.0f;
-      int delta_deg = gAngSpeed * (delta_ms / 1000.0f);
+      float delta_arc = gLinSpeed * (delta_ms / 1000.0f);// The distance travelled
+      float eyebot_angle_rad = gAngle * M_PI / 180.0f;// The EyeBot's current orientation in radians
+      int delta_deg = gAngSpeed * (delta_ms / 1000.0f);// The change in orientation in degrees
 
-      if (gLinSpeed < 0) delta_deg *= -1;
+      if (gLinSpeed < 0) delta_deg *= -1;// If reversing, invert the change of orientation
 
-      if (gAngSpeed != 0 && delta_ms != 0 && abs(delta_deg) > 5)
+      if (gAngSpeed != 0 && delta_ms != 0 && abs(delta_deg) > 5)// If delta_deg is very small, these calculations become very inaccurate
       {
-        float delta_rad = delta_deg * M_PI / 180.0f;
-        float radius = delta_arc / delta_rad;
+        float delta_rad = delta_deg * M_PI / 180.0f;// Convert delta_deg to radians
+        float radius = delta_arc / delta_rad;// Calculate the radius of the circle delta_arc is a segment of
 
+        // Assumes at this stage that the EyeBot is oriented along the y-axis,
+        // with the positive y-axis representing the forward direction, and the positive x-axis
+        // representing the lateral right direction.
         float x = radius * sinf(delta_rad);
         float y = radius - (radius * cosf(delta_rad));
 
+        // Peform a matrix-rotation transformation to re-orient the change in the EyeBot's
+        // x and y position relative to its current angular orientation.
         *dx = x*sinf(eyebot_angle_rad) + y*cosf(eyebot_angle_rad);
         *dy = x*cosf(eyebot_angle_rad) - y*sinf(eyebot_angle_rad);
       }
       else
       {
+        // If there is no change in angle, assume strictly linear movements.
+        // Assumes that the positive y-axis represents the forward direction, and the positive x-axis
+        // represents the lateral right direction.
         *dy = delta_arc * cosf(eyebot_angle_rad);
         *dx = delta_arc * sinf(eyebot_angle_rad);
       }
@@ -205,6 +238,10 @@ static void calcDeltaPosition(int delta_ms, int *dx, int *dy, int *dphi)
     }
     case VW_OP_TURN:
     {
+      // The recorded angular speed of the EyeBot assumes that both motors are turning in the same direction,
+      // or at least one is stationary.
+      // For this operation the motors are turning in the opposite directions,
+      // so the defined angular speed of the EyeBot is effectively doubled. 
       float delta_deg = gAngSpeed * (2*delta_ms / 1000.0f);
 
       *dphi = delta_deg;
@@ -227,12 +264,15 @@ int EYEBOTInit()
 
   pinMode(PIN_LEFT_MOTOR_DIR, OUTPUT);
   pinMode(PIN_RIGHT_MOTOR_DIR, OUTPUT);
+  // The directional controls of the left and right motors for
+  // the Makerverse 2 channel motor driver are inverted.
   digitalWrite(PIN_LEFT_MOTOR_DIR, HIGH);
   digitalWrite(PIN_RIGHT_MOTOR_DIR, LOW);
 
-  ////////////////////////////////////////////
-  // Enable being powered from the power rail
-  ////////////////////////////////////////////
+  /////////////////////////////////////////////
+  // Enable being powered from the power rail,
+  // as opposed to USB port.
+  /////////////////////////////////////////////
 
   //pinMode(PIN_BATTERY_POWER, OUTPUT);
   //digitalWrite(PIN_BATTERY_POWER, HIGH);
@@ -265,13 +305,14 @@ int EYEBOTInit()
     .mode = 0,
     .duty_cycle_pos = 0,    //50% duty cycle
     .cs_ena_posttrans = 3,  //Keep the CS low 3 cycles after transaction, to stop slave from missing the last bit when CS has less propagation delay than CLK
-    .clock_speed_hz = SPI_MASTER_FREQ_10M,
+    .clock_speed_hz = SPI_MASTER_FREQ_10M, // SPI cannot operate above 10 MHz for ESP32
     .spics_io_num = PIN_SPI_CS,
     .queue_size = 1
   };
 
   pinMode(PIN_SPI_SCLK, OUTPUT);
   pinMode(PIN_SPI_CS, OUTPUT);
+  // The ESP32-CAM drops the voltage on this pin when it wants to signal that it has a new image segment to deliver.
   pinMode(PIN_CAM_SIGNAL, INPUT_PULLUP);
 
   //Initialize the SPI bus and add the ESP32-Camera as a device
@@ -284,13 +325,18 @@ int EYEBOTInit()
   //Initialise timer
   ///////////////////
 
+  // This just initialises one of the multiple number of timers available on the
+  // ESP32-S3
+
   timer_config_t timer_config = {};
   timer_config.alarm_en = TIMER_ALARM_DIS;
   timer_config.counter_en = TIMER_PAUSE;
   timer_config.intr_type = TIMER_INTR_LEVEL;
   timer_config.counter_dir = TIMER_COUNT_UP;
   timer_config.auto_reload = TIMER_AUTORELOAD_DIS;
-  timer_config.divider = 40000;//Decrements 80 MHz/40000 = 2000 times a second
+  // Divider value cannot be higher than 2^16.
+  // Increments 80 MHz/40000 = 2000 times a second
+  timer_config.divider = 40000;
 
   err = timer_init(gTimerGroup, gMotorTimerIdx, &timer_config);
   assert(err == ESP_OK);
@@ -312,6 +358,7 @@ int EYEBOTInit()
   if (!gTouch.init())
     gTouchEnabled = false;
 
+  // Allocate a buffer for image presentation operations to the display
   pLCDBuffer = (RGB565*)calloc(LCD_WIDTH*LCD_HEIGHT, sizeof(RGB565));
   if (!pLCDBuffer)
     return -1;
@@ -387,6 +434,8 @@ int LCDSetColor(COLOR fg, COLOR bg)
   return 0;
 }
 
+// BEN: I do not know the index numbers for the
+// fonts available through TFT_eSPI.
 int LCDSetFont(int font, int variation)
 {
   gTFT.setTextFont(font);
@@ -394,6 +443,8 @@ int LCDSetFont(int font, int variation)
   return 0;
 }
 
+// The font size number correlates to a font pixel height
+// times 10 in TFT_eSPI.
 int LCDSetFontSize(int fontsize)
 {
   gTFT.setTextSize(fontsize);
@@ -406,6 +457,8 @@ int LCDSetMode(int mode)
   return -1;
 }
 
+// BEN: Since there does not exist a menu function that binds function pointers
+// to these menu items, I don't know how to implement this.
 int LCDMenu(char *st1, char *st2, char *st3, char *st4)
 {
   return -1;
@@ -435,6 +488,7 @@ int LCDPixel(int x, int y, COLOR col)
   return 0;
 }
 
+// BEN: This function does not seem to work as intended, but returns only black pixels.
 COLOR LCDGetPixel(int x, int y)
 {
   RGB565 col = gTFT.readPixel(x, y);
@@ -503,11 +557,15 @@ int LCDCircle(int x1, int y1, int radius, COLOR col, int fill)
   return 0;
 }
 
+// BEN: I don't know how this function is meant to mesh with LCDImageStart.
+// Also, image sizes from the ESP32-CAM are fixed to QQVGA.
 int LCDImageSize(int t)
 {
   return -1;
 }
 
+// BEN: The user is technically able to allocate a pixel buffer as large as the
+// display and present it to the screen.
 int LCDImageStart(int x, int y, int xs, int ys)
 {
   gImgXStart = x;
@@ -577,6 +635,7 @@ int LCDImageBinary(BYTE *b)
   return 0;
 }
 
+// The TFT_eSPI automatically refreshes as a background interrupt
 int LCDRefresh(void)
 {
   return 0;
@@ -592,6 +651,10 @@ int KEYGet(void)
   return key;
 }
 
+// BEN: Absent the LCDMenu functions, I implemented this to interpret
+// the T-Display-S3's physical buttons as keys instead. It's possible
+// for more than one button to be pressed at a time, so it's up to the
+// user to interpret the key enums as bit-flags in the value returned.
 int KEYRead(void)
 {
   int key = NOKEY;
@@ -652,11 +715,13 @@ int KEYReadXY(int *x, int *y)
   return 0;
 }
 
+// The ESP32-CAM is already initialised after EYEBOTInit() is invoked.
 int CAMInit(int resolution)
 {
   return 0;
 }
 
+// The ESP32-CAM cannot be released.
 int CAMRelease(void)
 {
   return 0; 
@@ -696,6 +761,7 @@ int CAMGet(BYTE *buf)
 
   if (timed_out)
   {
+    // Return a blank image
     for (int i = 0; i < QQVGA_WIDTH*QQVGA_HEIGHT; i++)
     {
       img[i] = RED;
@@ -768,6 +834,7 @@ int CAMGetGray(BYTE *buf)
   return 0;
 }
 
+// The only image processing resolution available is QQVGA
 int IPSetSize(int resolution)
 {
   return -1;
@@ -807,6 +874,8 @@ void IPLaplace(BYTE* grayIn, BYTE* grayOut)
   }
 }
 
+// BEN: Based on my research, this appears to be a Pseudo-Sobel implementation, and not true Sobel.
+// I copied this straight from the EyeBot 8 code.
 void IPSobel(BYTE* grayIn, BYTE* grayOut)
 {
   if (!grayIn || !grayOut)
@@ -829,7 +898,7 @@ void IPSobel(BYTE* grayIn, BYTE* grayOut)
     grayOut[i] = (BYTE)grad;
   }
 
-  memset(grayOut + (QQVGA_HEIGHT-1)*(QQVGA_WIDTH), 0, QQVGA_WIDTH); 
+  memset(grayOut + (QQVGA_HEIGHT-1)*(QQVGA_WIDTH), 0, QQVGA_WIDTH);// clear final row 
 }
 
 void IPCol2Gray(BYTE* imgIn, BYTE* grayOut)
@@ -896,6 +965,7 @@ void IPCol2HSI(BYTE* img, BYTE* h, BYTE* s, BYTE* i)
   }
 }
 
+// A black colour pixel in c2 is interpreted as transparency
 void IPOverlay(BYTE* c1, BYTE* c2, BYTE* cOut)
 {
   if (!c1 || !c2 || !cOut)
@@ -913,6 +983,7 @@ void IPOverlay(BYTE* c1, BYTE* c2, BYTE* cOut)
   }
 }
 
+// A black pixel in g2 is interpreted as transparency
 void IPOverlayGray(BYTE* g1, BYTE* g2, COLOR col, BYTE* cOut)
 {
   if (!g1 || !g2 || !cOut)
@@ -928,6 +999,9 @@ void IPOverlayGray(BYTE* g1, BYTE* g2, COLOR col, BYTE* cOut)
   }
 }
 
+// Not all RGB888 pixel colours are representable on the T-Display-S3,
+// hence the conversion to RGB565 first, and then the conversion from
+// RGB565 to RGB888.
 COLOR IPPRGB2Col(BYTE r, BYTE g, BYTE b)
 {
   RGB565 col = gTFT.color565(r, g, b);
@@ -1165,7 +1239,7 @@ int PSDGet(int psd)
       return pairs[i].distance;
   }
 
-  return 300;//max distance
+  return 300;//max detectable distance
 }
 
 int PSDGetRaw(int psd)
@@ -1253,10 +1327,13 @@ int VWSetSpeed(int lin_speed, int ang_speed)
     timer_pause(gTimerGroup, gMotorTimerIdx);
   }
 
+  // Makerverse 2 Channel motor driver trips out if the
+  // direction of the motors is changed while the PWM is non-zero.
   analogWrite(PIN_LEFT_MOTOR_PWM, 0);
   analogWrite(PIN_RIGHT_MOTOR_PWM, 0);
 
-  // Update current eyebot position
+  // Reset the current eyebot starting position from its last
+  // estimated postion based off the current linear and angular speed.
   int x, y, angle;
   VWGetPosition(&x, &y, &angle);
   VWSetPosition(x, y, angle);
@@ -1323,7 +1400,7 @@ int VWSetSpeed(int lin_speed, int ang_speed)
   else
   {
     // When turning on spot, angular speed is inherently doubled, since
-    // it only assumes that it is pivoting around a stationary wheel.
+    // the base angular speed only assumes that it is pivoting around a stationary wheel.
 
     if (clockwise)
     {

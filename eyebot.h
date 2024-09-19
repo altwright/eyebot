@@ -441,7 +441,7 @@ int VWTurn(int angle, int ang_speed);
 // Drive Curve, dist [mm], angle (orientation change) [degrees], lin. speed [mm/s]
 int VWCurve(int dist, int angle, int lin_speed);
 
-// Drive x[mm] straight and y[mm] left, x>|y|
+// Drive y[mm] straight and x[mm] right, y>|x|
 int VWDrive(int dx, int dy, int lin_speed);     
 
 // Return remaining drive distance in [mm]

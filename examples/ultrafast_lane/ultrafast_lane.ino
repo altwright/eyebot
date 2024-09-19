@@ -53,12 +53,15 @@ COLOR pColImg[QQVGA_PIXELS];
 BYTE pGrayImg[QQVGA_PIXELS];
 BYTE pEdgeImg[QQVGA_PIXELS];
 
-int gMaxLinSpeed = 130, gMaxAngSpeed = 30;
+int gMaxLinSpeed = 150, gMaxAngSpeed = 30;
 Phase gPhase = PHASE_SETTINGS;
 int gStrongEdgeThreshold = 200;
 int gWeakEdgeThreshold = 100;
-float gDenoiseSigma = 1.6f;
+float gDenoiseSigma = 1.2f;
 int gLCDWidth = -1, gLCDHeight = -1;
+
+const int NULL_X1 = (CAMWIDTH >> 1) - 20,
+          NULL_X2 = (CAMWIDTH >> 1) + 20;
 
 const LinePatternInfo pPatternInfoLookUps[110] = {
   {1, 4, 1, 4},//1
@@ -1009,9 +1012,6 @@ void testing_screen()
             LB_X2 = LB_X1 + 38,
             LB_Y1 = gLCDHeight - 12,
             LB_Y2 = gLCDHeight;
-  
-  const int NULL_X1 = (CAMWIDTH >> 1) - 20,
-            NULL_X2 = NULL_X1 + 40;
 
   while (!quit)
   {
@@ -1084,7 +1084,7 @@ void testing_screen()
     LCDArea(LINES_X, LINES_Y, LINES_X + CAMWIDTH, LINES_Y + CAMHEIGHT - y_row_offset, BLACK);
     for (int i = 0; i < lineCount; i++)
     {
-      if (lines[i].len >= MIN_LINE_LEN && (lines[i].x2 < NULL_X1 || lines[i].x2 > NULL_X2))
+      if (lines[i].len >= MIN_LINE_LEN)
         LCDLine(lines[i].x1 + LINES_X, lines[i].y1 + LINES_Y, lines[i].x2 + LINES_X, lines[i].y2 + LINES_Y, RED);
     }
 
@@ -1199,9 +1199,6 @@ void navigation_screen()
   const int width = CAMWIDTH,
             height =  CAMHEIGHT - y_row_offset;
   
-  const int NULL_X1 = (CAMWIDTH >> 1) - 20,
-            NULL_X2 = NULL_X1 + 40;
-  
   int screen_width = -1, screen_height = -1;
   LCDGetSize(&screen_width, &screen_height);
   const int RESET_X1 = 5,
@@ -1225,10 +1222,7 @@ void navigation_screen()
   LCDSetPrintf(RESET_Y1 + 30, RESET_X1 + 37, "TOUCH");
   LCDSetPrintf(RESET_Y1 + 60, RESET_X1 + 37, "RESET");
 
-  // Clear the camera's image triple-buffer
-  CAMGet((BYTE*)pColImg);
-  CAMGet((BYTE*)pColImg);
-  CAMGet((BYTE*)pColImg);
+  VWSetSpeed(300, 0);
 
   while (!quit)
   {
@@ -1266,7 +1260,7 @@ void navigation_screen()
         {
           if (line.y1 < line.y2)
           {
-            if (line.x1 < NULL_X1 && line.x2 < line.x1)
+            if (line.x1 < (CAMWIDTH >> 1) && line.x2 < line.x1)
             {
               if (left_lane_idx >= 0)
               {
@@ -1277,7 +1271,7 @@ void navigation_screen()
                 left_lane_idx = i;
               }
             }
-            else if (line.x1 > NULL_X2 && line.x2 > line.x1)
+            else if (line.x1 > (CAMWIDTH >> 1) && line.x2 > line.x1)
             {
               if (right_lane_idx >= 0)
               {
@@ -1291,7 +1285,7 @@ void navigation_screen()
           }
           else
           {
-            if (line.x2 < NULL_X1 && line.x2 > line.x1)
+            if (line.x2 < (CAMWIDTH >> 1) && line.x2 > line.x1)
             {
               if (left_lane_idx >= 0)
               {
@@ -1302,7 +1296,7 @@ void navigation_screen()
                 left_lane_idx = i;
               }
             }
-            else if (line.x2 > NULL_X2 && line.x2 < line.x1)
+            else if (line.x2 > (CAMWIDTH >> 1) && line.x2 < line.x1)
             {
               if (right_lane_idx >= 0)
               {
@@ -1432,11 +1426,9 @@ void navigation_screen()
       {
         LCDLine(lines[i].x1 + LINES_X, lines[i].y1 + LINES_Y, lines[i].x2 + LINES_X, lines[i].y2 + LINES_Y, GREEN);
       }
-      else if (lines[i].len >= MIN_LINE_LEN && (lines[i].x2 < NULL_X1 || lines[i].x2 > NULL_X2))
+      else if (lines[i].len >= MIN_LINE_LEN)
       {
         LCDLine(lines[i].x1 + LINES_X, lines[i].y1 + LINES_Y, lines[i].x2 + LINES_X, lines[i].y2 + LINES_Y, RED);
-        //LCDPixel(lines[i].x1 + LINES_X, lines[i].y1 + LINES_Y, YELLOW);
-        //LCDPixel(lines[i].x2 + LINES_X, lines[i].y2 + LINES_Y, BLUE);
       }
     }
   }
@@ -1565,6 +1557,8 @@ void setup()
   assert(!err);
 
   LCDGetSize(&gLCDWidth, &gLCDHeight);
+
+  VWSetOffsets(0, 0);
 }
 
 void loop() 
