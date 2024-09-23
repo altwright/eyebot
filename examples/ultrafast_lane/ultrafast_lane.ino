@@ -4,6 +4,8 @@
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
 #define INPUT_DELAY_MS 100
+// This defines how many pixels a line should consist before it
+// will be considered as being part of a lane marking.
 #define MIN_LINE_LEN 6
 
 typedef uint8_t u8;
@@ -16,21 +18,12 @@ enum Phase {
   PHASE_NAVIGATING
 };
 
-//!
-//! Sliding kernel accumulation has 4 cases:
-//! 1. left side out and right side in
-//! 2. left side in and right side in
-//! 3. left side in and right side out
-//! 4. left side out and right side out
-//!
-//! Small (S) kernels corresponds to kernels with radius < width; r < w
-//! Mid   (M) kernels corresponds to kernels with kernel size < width; 2r+1 < w
-//! Large (L) kernels corresponds to kernels with radius > width; r > w
-//!
-//! The fast version for (S) results in 3 loops for cases 1, 2 and 3.
-//! The fast version for (M) results in 3 loops for cases 1, 4 and 3.
-//! The fast version for (L) results in 1 loop for cases 4.
-//!
+/*
+This enum was taken from https://github.com/bfraboni/FastGaussianBlur
+"Kernel" refers to the effective stencil that is overlaid on an image,
+with the pixels that fall within the stencil being considered for image
+processing functions.
+*/
 enum Kernel
 {
     kSmall,
@@ -38,17 +31,23 @@ enum Kernel
     kLarge,
 };
 
+/*
+This definition was extrapolated from the Ultrafast line detector paper.
+*/
 typedef struct {
   u8 slope, len, start, end;
 } LinePatternInfo;
 
+/*
+x1 and y1 mark one end of the line, whereas x2 and y2 mark the other end.
+*/
 typedef struct {
   u16 x1, y1, x2, y2;
   u32 len;
 } Line;
 
 u8 *pPatternBins = NULL;
-u8 pBuffer[QQVGA_SIZE];
+u8 pBuffer[QQVGA_SIZE];//General purpose buffer
 COLOR pColImg[QQVGA_PIXELS];
 BYTE pGrayImg[QQVGA_PIXELS];
 BYTE pEdgeImg[QQVGA_PIXELS];
@@ -60,9 +59,21 @@ int gWeakEdgeThreshold = 100;
 float gDenoiseSigma = 1.2f;
 int gLCDWidth = -1, gLCDHeight = -1;
 
+/*
+BEN: I struggled to come up with an approriate name here, but the
+NULLs here represent the start and end of the horizontal region where
+if a line identified being possibly a lane marking is projected and
+ends up intersecting this region, then the lane is most likely bending
+inwards.
+*/
 const int NULL_X1 = (CAMWIDTH >> 1) - 20,
           NULL_X2 = (CAMWIDTH >> 1) + 20;
 
+/*
+This look-up table is taken directly from the Ultrafast line detector paper,
+representing information about the 110 unique variations of valid lines that can be formed in
+a 4 by 4 pixel area.
+*/
 const LinePatternInfo pPatternInfoLookUps[110] = {
   {1, 4, 1, 4},//1
   {2, 3, 2, 4},//2
@@ -176,6 +187,12 @@ const LinePatternInfo pPatternInfoLookUps[110] = {
   {6, 2, 6, 7}//110
 };
 
+/*
+This lookup table was drawn from the Ultrafast line detector paper,
+with eight entries corresponding to the eight slope values a line
+can have. Each of these entries then have three slope values for
+connecting lines that the original line is compatible with.
+*/
 const u8 pSlopeConnectivityLookup[8][3] = {
   {1, 2, 8},
   {1, 2, 3},
@@ -187,6 +204,15 @@ const u8 pSlopeConnectivityLookup[8][3] = {
   {7, 8, 1}
 };
 
+/*
+Lines are only able to form connections with lines in 
+4 by 4 pixel areas to their approximate left if they
+have their final end pixel terminating in 10 specific
+perimeter pixels that are butted up against the current
+lines starting pixel. The terminating pixel locations
+are given an index 1 to 12, as per the Ultrafast Line
+Detector paper.
+*/
 // {Current Start, Left End}
 const u8 pLeftEdgeConnectivityLookup[10][2] = {
   {1, 4},
@@ -201,6 +227,15 @@ const u8 pLeftEdgeConnectivityLookup[10][2] = {
   {10, 7}
 };
 
+/*
+Lines are only able to form connections with lines in 
+4 by 4 pixel areas that are approximately above them if they
+have their final end pixel terminating in 10 specific
+perimeter pixels that are butted up against the current
+lines starting pixel. The terminating pixel locations
+are given an index 1 to 12, as per the Ultrafast Line
+Detector paper.
+*/
 // {Current Start, Upper End}
 const u8 pUpperEdgeConnectivityLookup[10][2] = {
   {1, 10},
@@ -215,7 +250,12 @@ const u8 pUpperEdgeConnectivityLookup[10][2] = {
   {4, 7}
 };
 
-//! mirror without repetition index
+/*
+This from was taken from https://github.com/bfraboni/FastGaussianBlur
+If the gaussian blur radius extends beyong the edge of an image, it
+assumes that the image is mirrored beyond this point and returns the
+index of the pixel that is reflected accordingly.
+*/ 
 int mirror(const int begin, const int end, const int index)
 {
     if(index >= begin && index < end)
@@ -228,6 +268,9 @@ int mirror(const int begin, const int end, const int index)
     return repeat%2 ? slength-mod+begin : mod+begin;
 }
 
+/*
+This function was adapted from https://github.com/bfraboni/FastGaussianBlur
+*/ 
 //!
 //! \brief This function converts the standard deviation of 
 //! Gaussian blur into a box radius for each box blur pass. 
@@ -257,6 +300,11 @@ float sigma_to_box_radius(int boxes[], const float sigma, const int n)
   return sqrtf((m*wl*wl+(n-m)*wu*wu-n)/12.f);
 }
 
+/*
+This function was adapted from https://github.com/bfraboni/FastGaussianBlur
+It was changed to be applied only to grayscale images, whereas the original
+accomodates RGB images.
+*/ 
 //! \param[in] in           source buffer
 //! \param[in,out] out      target buffer
 //! \param[in] w            image width
@@ -385,6 +433,9 @@ void horizontal_blur(BYTE in[], BYTE out[], int w, int h, int r)
   }
 }
 
+/*
+This function was adapted from https://github.com/bfraboni/FastGaussianBlur
+*/ 
 //!
 //! \brief This function performs a 2D tranposition of an image. 
 //!
@@ -422,6 +473,9 @@ void flip_img(BYTE in[], BYTE out[], const int w, const int h)
   }
 }
 
+/*
+This function was adapted from https://github.com/bfraboni/FastGaussianBlur
+*/ 
 void gaussian_blur(BYTE in[], BYTE out[], int width, int height, float sigma)
 {
   // compute box kernel sizes
@@ -430,7 +484,9 @@ void gaussian_blur(BYTE in[], BYTE out[], int width, int height, float sigma)
 
   u8 *tmp = pBuffer;
 
-  // perform 3 horizontal blur passes
+  // Perform 3 horizontal blur passes, since the original author of the
+  // Fast Gaussian Blur algorithm stated that 3 should be sufficient for
+  // adequate blur quality.
   horizontal_blur(in, out, width, height, boxes[0]);
   horizontal_blur(out, tmp, width, height, boxes[1]);
   horizontal_blur(tmp, out, width, height, boxes[2]);
@@ -449,6 +505,16 @@ void gaussian_blur(BYTE in[], BYTE out[], int width, int height, float sigma)
   memcpy(out, tmp, width*height);
 }
 
+/*
+Finding the separate Sobel gradients in the x and y axex is essential for the Canny Edge Detector.
+I adapted the algorithm used from https://github.com/fzehracetin/sobel-edge-detection-in-c/tree/main , 
+https://homepages.inf.ed.ac.uk/rbf/HIPR2/sobel.htm , and 
+https://en.wikipedia.org/wiki/Canny_edge_detector#Finding_the_intensity_gradient_of_the_image ,
+although possibly imperfectly.
+
+The out paramter dir_out[] contains effectively enums for the 4 possible general directions of a
+gradient found in the corresponding index in the other out parameter magniture_out[].
+*/
 void sobel_gradients(BYTE in[], int width, int height, BYTE magnitude_out[], BYTE dir_out[])
 {
   // X Gradient Kernel
@@ -504,6 +570,15 @@ void sobel_gradients(BYTE in[], int width, int height, BYTE magnitude_out[], BYT
   }
 }
 
+/*
+This Canny Edge Detector was implemented based on the information in
+https://docs.opencv.org/4.x/da/d22/tutorial_py_canny.html and
+https://en.wikipedia.org/wiki/Canny_edge_detector . It is currently
+flawed however, since the Canny Edge Detector is meant to emit only
+single-pixel width edges whereas for certain angles it produces
+double-pixel width edges, which is unsuitable for the Ultrafast
+Line Detector.
+*/
 void canny_edge_detector(BYTE gray_in[], BYTE gray_out[], int width, int height)
 {
   //1. Denoise image (Gaussian blur)
@@ -570,6 +645,12 @@ void canny_edge_detector(BYTE gray_in[], BYTE gray_out[], int width, int height)
       }
     }
 
+    // START REGION
+    /*
+    This was added as a mitigation against double-pixel width
+    edges, but it only produces fragmented lines for the Ultrafast Line
+    Detector.
+    */
     if (gray_out[i])
     {
       if (gray_out[(y-1)*width + (x-1)])
@@ -584,9 +665,14 @@ void canny_edge_detector(BYTE gray_in[], BYTE gray_out[], int width, int height)
         gray_out[y*width + (x+1)] = 0;
       }
     }
+    // END REGION
   }
 }
 
+/*
+This function translates the position number of an edge pixel within a 4 by 4 pixel block
+into pixel coordinates, with the edge position numbers drawn from the Ultrafast Line Detector.
+*/
 void get_pixel_coords(u8 block_edge_pos, u16 block_start_x, u16 block_start_y, u16 *x, u16 *y)
 {
   switch (block_edge_pos)
@@ -644,6 +730,19 @@ void get_pixel_coords(u8 block_edge_pos, u16 block_start_x, u16 block_start_y, u
   }
 }
 
+/*
+The parameter list for this function is not as compact as it could be, but this function
+checks if a line in the current 4 by 4 pixel block can connect to a line in the block
+immediately to the left of it.
+It returns true if they can connect, and false if it cannot.
+
+The parameters current_x and current_y refer to the starting x and y pixel coordinates of the
+current block, and current_pattern is the index into the line pattern lookup table which gives
+extra information about the current block.
+The parameters target_x and target_y refer to the starting x and y pixel coordinates of the
+block immediately to the left of the current block, and target_pattern is the index into the 
+line pattern lookup table which gives extra information about this target block.
+*/
 bool connect_left_lines(int current_x, int current_y, int target_x, int target_y, u8 current_pattern, u8 target_pattern, Line lines[], int lineCount)
 {
   if (!current_pattern || !target_pattern)
@@ -702,6 +801,20 @@ bool connect_left_lines(int current_x, int current_y, int target_x, int target_y
   return connected;
 }
 
+/*
+The parameter list for this function is not as compact as it could be, but this function
+checks if a line in the current 4 by 4 pixel block can connect to a line in a target block
+that's one of the three blocks directly above the current block.
+
+It returns true if they can connect, and false if it cannot.
+
+The parameters current_x and current_y refer to the starting x and y pixel coordinates of the
+current block, and current_pattern is the index into the line pattern lookup table which gives
+extra information about the current block.
+The parameters target_x and target_y refer to the starting x and y pixel coordinates of one
+of the blocks immediately above current block (top left, above, or top right), and target_pattern 
+is the index into the line pattern lookup table which gives extra information about this target block.
+*/
 bool connect_upper_lines(int current_x, int current_y, int target_x, int target_y, u8 current_pattern, u8 target_pattern, Line lines[], int lineCount)
 {
   if (!current_pattern || !target_pattern)
@@ -760,10 +873,15 @@ bool connect_upper_lines(int current_x, int current_y, int target_x, int target_
   return connected;
 }
 
+/*
+This function reads from the global variable for the edge-detected image generated
+by the Canny Edge Detector, and writes into the out parameter lines[] the lines that
+are detected within the edge image.
+*/
 int ultrafast_line_detector(int width, int height, int max_line_count, Line lines[])
 {
   int lineCount = 0;
-  u8 *matchedPatterns = (u8*)pGrayImg;
+  u8 *matchedPatterns = (u8*)pGrayImg;// Reuse the memory from the gray image
 
   for (int y = 0; y < height; y += 4)
   for (int x = 0; x < width; x += 4)
@@ -778,12 +896,24 @@ int ultrafast_line_detector(int width, int height, int max_line_count, Line line
         count++;
         int i = (y + yy)*width + (x + xx);
 
+        /*
+        The specific line pattern the current block
+        conforms to is found by calculating the index
+        into the pattern lookup table according to the method
+        defined in the Ultrafast Line Detector paper.
+        */
         if (pEdgeImg[i])
           pattern |= 1 << ((yy+1)*4 - count);
       }
     }
 
     int i = y*width + x;
+    /*
+    matchedPatterns[] stores the index for line pattern the block
+    conforms to. pPatternBins[] returns an index in the range [0, 110],
+    with 0 indicating that the block doesn't conform to any of the 110
+    line patterns.
+    */
     matchedPatterns[i] = pPatternBins[pattern];
 
     if (matchedPatterns[i])
@@ -1313,6 +1443,7 @@ void navigation_screen()
 
       LCDArea(MSG_X, MSG_Y, screen_width, MSG_Y + 30, BLACK);
 
+      // If no lanes are detected...
       if (left_lane_idx < 0 && right_lane_idx < 0)
       {
         VWSetSpeed(gMaxLinSpeed, 0);
@@ -1321,6 +1452,12 @@ void navigation_screen()
       { 
         bool turning_right = false, turning_left = false;
 
+        /*
+        Check if the line, when projected, intercepts the
+        NULL zone. If so, then it indicates that the lane
+        is bending inwards in the view of the camera.
+        */
+
         if (left_lane_idx >= 0)
         {
           float intercept = 0.0f, y_border_dist = 0.0f;
@@ -1328,6 +1465,12 @@ void navigation_screen()
 
           if (left_lane.y1 < left_lane.y2)
           {
+            /*
+            These are just simple linear equations being formed
+            by the line, and projecting out until it intercepts
+            the NULL zone.
+            */
+
             float rise = left_lane.y2 - left_lane.y1;
             float run = left_lane.x1 - left_lane.x2;
             float grad = rise / run;
@@ -1344,6 +1487,13 @@ void navigation_screen()
             y_border_dist = left_lane.y2;
             intercept = x_border_dist*grad;
           }
+
+          /*
+          If the NULL zone y-intercept point is within
+          the region-of-interest of the camera, then we
+          interpret that as meaning the lane is bending
+          inwards.
+          */
 
           if (intercept < y_border_dist) 
           {
@@ -1384,34 +1534,26 @@ void navigation_screen()
         if ((!turning_left && !turning_right) || (turning_left && turning_right))
         {
           VWSetSpeed(gMaxLinSpeed, 0);
-          LCDArea(125, LINES_Y + height + 5, 165, LINES_Y + height + 50, GREEN);
-          LCDArea(5, LINES_Y + height + 5, 45, LINES_Y + height + 50, GREEN);
         }
         else if (turning_left)
         {
           VWSetSpeed(gMaxLinSpeed, -1*gMaxAngSpeed);
-          LCDArea(125, LINES_Y + height + 5, 165, LINES_Y + height + 50, RED);
-          LCDArea(5, LINES_Y + height + 5, 45, LINES_Y + height + 50, GREEN);
         }
         else
         {
           VWSetSpeed(gMaxLinSpeed, gMaxAngSpeed);
-          LCDArea(125, LINES_Y + height + 5, 165, LINES_Y + height + 50, GREEN);
-          LCDArea(5, LINES_Y + height + 5, 45, LINES_Y + height + 50, RED);
         }
       }
     }
     else
     {
       VWSetSpeed(0, 0);
-      LCDArea(125, LINES_Y + height + 5, 165, LINES_Y + height + 50, RED);
-      LCDArea(5, LINES_Y + height + 5, 45, LINES_Y + height + 50, RED);
       LCDSetFontSize(3);
       LCDSetColor(BLACK, RED);
       LCDSetPrintf(MSG_Y, MSG_X, "COLLISION");
     }
 
-    // Display
+    // Drawing to the display
     LCDImageStart(COLOR_X, COLOR_Y, width, height);
     COLOR* colorSubImage = pColImg + y_row_offset*width;
     LCDImage((BYTE*)colorSubImage);
@@ -1442,6 +1584,13 @@ void setup()
   pPatternBins = (u8*)calloc(1 << 16, sizeof(u8));
   assert(pPatternBins);
 
+  /*
+  The indices into pPatternBins are calculated from the
+  4 by 4 pixel blocks that lines cross through, according
+  to the method defined in the Ultrafast Line Detector paper.
+  For each of the elements below, they are assigned one ID of the 110
+  unique line patterns that can occur in a 4 by 4 pixel block.
+  */
   pPatternBins[15] = 1;
   pPatternBins[7] = 2;
   pPatternBins[135] = 3;

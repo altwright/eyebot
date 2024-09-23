@@ -38,9 +38,14 @@ int gDriveDeltaX = 50;
 int gDriveDeltaY = 250;
 
 int gScreenIdx = 0;
+
 const int MAX_SCREENS = 1,
           MAX_OPTIONS = 6;
 
+/*
+Screen element coordinates and dimensions relevant
+to all demo programs.
+*/
 const int X_MARGIN = 5,
           Y_MARGIN = 5,
           OPTION_WIDTH = 160,
@@ -82,6 +87,11 @@ const int BUTTON_WIDTH = (LCD_WIDTH >> 2) - 4,
 
 const COLOR MENU_BG_COLOR = WHITE;
 
+/*
+The parameter options is null-terminated (i.e. the last element should be NULL).
+This function draws a whole screen with up to six vertical menu options from the 
+parameter options.
+*/
 void draw_menu(const char* options[])
 {
   LCDClear();
@@ -109,6 +119,11 @@ void draw_menu(const char* options[])
   LCDSetPrintf(LB_Y1 + 4, 75, "%d/%d ", gScreenIdx + 1, MAX_SCREENS);
 }
 
+/*
+Returns the index of the option selected from the on-screen menu drawn by
+the function draw_menu(). Also highlights the selected option on the screen 
+in the equivalent index position within the parameter options.
+*/
 int selected_menu_option(const char* options[])
 {
   int x, y;
@@ -141,6 +156,10 @@ void setup() {
   EYEBOTInit();
 }
 
+/*
+Demo which shows the camera feed from the ESP32-CAM with the current display frames-
+per-second printed beneath it.
+*/
 void camera_demo()
 {
   enum {
@@ -309,6 +328,12 @@ void camera_demo()
   }
 }
 
+/*
+In this demo the user can specify the linear and angular speed for the
+EyeBot, alongside offsets for the PWM values sent to the motors. When
+the user select start, the EyeBot will drive indefinitely according to
+these values.
+*/
 void vw_set_speed_demo()
 {
   enum {
@@ -568,6 +593,10 @@ void vw_set_speed_demo()
 
 }
 
+/*
+In this demo the user can specify the absolute linear speed and
+the change in distance they want the EyeBot to travel in a straight line.
+*/
 void vw_straight_demo()
 {
   enum {
@@ -760,6 +789,11 @@ void vw_straight_demo()
   }
 }
 
+/*
+In this demo the user specifies the absolute angular speed and
+the change in the angular orientation of the EyeBot for when
+it turns on the spot.
+*/
 void vw_turn_demo()
 {
   enum {
@@ -947,6 +981,11 @@ void vw_turn_demo()
   }
 }
 
+/*
+In this demo the user specifies the absolute linear speed, the
+relative angular speed, and the change in distance for when the EyeBot
+drives along a curved path for the set distance.
+*/
 void vw_curve_demo()
 {
   enum {
@@ -1167,6 +1206,11 @@ void vw_curve_demo()
   }
 }
 
+/*
+In this demo the user specifies the change in x and y coordinates at a
+set absolute linear speed. The EyeBot then drives along a curve in a best
+attempt to satisfy the change of coordinates.
+*/
 void vw_drive_demo()
 {
   enum {
