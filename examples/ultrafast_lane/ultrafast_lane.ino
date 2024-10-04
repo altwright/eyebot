@@ -1356,6 +1356,8 @@ void navigation_screen()
 
   while (!quit)
   {
+    //unsigned long start_ms = millis();
+
     CAMGet((BYTE*)pColImg);
 
     IPCol2Gray((BYTE*)pColImg, pGrayImg);
@@ -1573,6 +1575,11 @@ void navigation_screen()
         LCDLine(lines[i].x1 + LINES_X, lines[i].y1 + LINES_Y, lines[i].x2 + LINES_X, lines[i].y2 + LINES_Y, RED);
       }
     }
+
+    // float delta_ms = 1.0f/((millis() - start_ms)/1000.0f);
+    // LCDSetColor(WHITE, BLACK);
+    // LCDSetFontSize(2);
+    // LCDSetPrintf(MSG_Y, MSG_X, "FPS: %.1f", delta_ms);
   }
 
   gPhase = PHASE_SETTINGS;

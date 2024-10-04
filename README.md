@@ -92,4 +92,4 @@ of the `.ino` sketch.
 | tests         | Tests specific features of the EyeBot, including the camera, driving functions, and position estimation. |
 | color_nav | After sampling a pixel colour in the EyeBot's view, the EyeBot can drive towards the centre-point of the largest object in its view whose colour falls within the specified HSI threshold, all the while avoiding head-on collisions. |
 | ultrafast_lane | A lane-based navigation demo that detects lanes using the ["Ultrafast" line detector](https://www.spiedigitallibrary.org/journals/journal-of-electronic-imaging/volume-31/issue-4/043019/Ultrafast-line-detector/10.1117/1.JEI.31.4.043019.short) method. Can navigate a complete lap of the UWA Robotics Lab test circuit by staying within the solid lane markings. |
-| color_lane | Unfinished, currently shows a debug screen. |
+| color_lane | Unfinished implementation of [Colour-based Segmentation for lane detection](https://ieeexplore.ieee.org/document/1505186). Currently shows a debug screen, and whether the algorithm can actually detect lanes has not yet been tested. |
