@@ -47,6 +47,11 @@ When new code is uploaded to the T-Display-S3 while both the T-Display-S3 and th
 
 To mitigate interference in images returned from the ESP32-CAM due to voltage drops created by the motors stalling or turning over from a stationary state, place a **16V, 220 uF capacitor** along the power rail connecting the ESP32-CAM to the T-Display-S3's 5V output pin, as depicted in the above pinout diagram for the EyeBot.
 
+## Include ESP32 Boards within Arduino IDE
+
+Select from the toolbar `File` and select the dropdown menu option `Preferences`.
+In the field `Additional boards manager URLs`, add the URL `https://dl.espressif.com/dl/package_esp32_index.json`.
+
 ## Uploading a program to the T-Display-S3
 
 Add...
